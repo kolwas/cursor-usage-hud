@@ -52,8 +52,10 @@ class Settings:
         # Project .env (optional) then process env.
         here = Path(__file__).resolve().parents[2]
         _load_dotenv(here / ".env")
-        state = Path(os.environ.get("USAGE_HUD_STATE_DIR") or "").expanduser()
-        if not str(state):
+        raw_state = os.environ.get("USAGE_HUD_STATE_DIR", "").strip()
+        if raw_state:
+            state = Path(raw_state).expanduser()
+        else:
             appdata = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
             state = Path(appdata) / "usage-hud"
         state.mkdir(parents=True, exist_ok=True)
