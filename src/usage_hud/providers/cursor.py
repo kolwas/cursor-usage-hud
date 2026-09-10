@@ -145,7 +145,7 @@ class CursorProvider(Provider):
                 label="Included plan",
                 used=plan_used,
                 limit=float(plan_limit) if plan_limit is not None else None,
-                unit="req$",
+                unit="",
                 remaining=float(plan_remaining) if plan_remaining is not None else None,
                 percent_used=float(total_pct) if total_pct is not None else None,
                 detail=" · ".join(detail_bits),
