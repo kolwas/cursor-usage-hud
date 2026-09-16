@@ -126,11 +126,7 @@ class UsageHudApp:
             self.panel.show()
         elif hidden:
             self.panel.hide()
-        elif (
-            self.settings.ui_mode == "chip"
-            and not self.panel.isVisible()
-            and not self.panel._single_screen_fled  # noqa: SLF001
-        ):
+        elif self.settings.ui_mode == "chip" and not self.panel.isVisible():
             self.panel.show()
             self.panel.collapse()
             self.panel.dock_to_taskbar(force=True)

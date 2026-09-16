@@ -87,11 +87,6 @@ class WeatherPanel(QWidget):
         # from self._projections, which only carries the derived burn-rate
         # numbers, not the raw observed samples.
         self._history = history
-        # True while hidden specifically because the cursor got close on a
-        # single-monitor setup (no other screen to flee to) — distinct from
-        # every other reason the chip might be hidden (snoozed, quiet mode),
-        # so a periodic refresh doesn't force it back under the cursor.
-        self._single_screen_fled = False
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -177,21 +172,12 @@ class WeatherPanel(QWidget):
 
     def _check_single_screen_proximity(self) -> None:
         """Single monitor only: enterEvent can't send the chip to "another
-        screen" that doesn't exist, so instead it hides on approach — not
-        just on direct contact, on getting within _HOVER_MARGIN — and comes
-        back once the cursor backs off. Tracked via its own flag so a
-        periodic refresh doesn't force it back under the cursor mid-flee,
-        and so any other reason it's hidden (snoozed, quiet mode) is left
-        alone — this method only ever acts on state it set itself.
+        screen" that doesn't exist, so instead it hops to the opposite side
+        of THIS screen on approach — sitting on the left, hovering sends it
+        right, and hovering again (it's now on the right) sends it back
+        left. Triggers within _HOVER_MARGIN, not just on direct contact.
         """
-        if len(QGuiApplication.screens()) > 1:
-            self._single_screen_fled = False
-            return
-        if not self._flee_eligible():
-            if self._single_screen_fled:
-                self._single_screen_fled = False
-                self.show()
-                self.dock_to_taskbar(force=True)
+        if len(QGuiApplication.screens()) > 1 or not self._flee_eligible():
             return
 
         near = (
@@ -199,13 +185,20 @@ class WeatherPanel(QWidget):
             .adjusted(-_HOVER_MARGIN, -_HOVER_MARGIN, _HOVER_MARGIN, _HOVER_MARGIN)
             .contains(QCursor.pos())
         )
-        if near and self.isVisible() and not self._single_screen_fled:
-            self._single_screen_fled = True
-            self.hide()
-        elif not near and self._single_screen_fled:
-            self._single_screen_fled = False
-            self.show()
-            self.dock_to_taskbar(force=True)
+        if not near:
+            return
+
+        screen = self._target_screen or screen_under_cursor() or QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        avail = screen.availableGeometry()
+        geo = self.frameGeometry()
+        on_right_half = geo.center().x() > avail.left() + avail.width() / 2
+        x = avail.left() + 16 if on_right_half else avail.right() - self.width() - 16
+        x = max(avail.left() + 8, min(x, avail.right() - self.width() - 8))
+        self.move(x, geo.top())
+        if self.isVisible():
+            self.raise_()
 
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)
