@@ -18,10 +18,16 @@ import base64
 from PySide6.QtCore import QBuffer, QIODevice, QPointF, Qt
 from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 
-_TRACK = QColor(255, 255, 255, 60)
-_ELAPSED = QColor(255, 255, 255, 165)
-_UNKNOWN = QColor(255, 255, 255, 90)
+_TRACK = QColor(255, 255, 255, 90)
+_ELAPSED = QColor(235, 238, 245, 255)
+_UNKNOWN = QColor(255, 255, 255, 120)
 _DOT_HALO = QColor(12, 14, 20, 210)
+# The chip window is translucent (WA_TranslucentBackground) — whatever is on
+# the real desktop shows through it. A semi-transparent bar blends into
+# THAT, not into a predictable dark panel, so on a light or busy background
+# it all but disappears. An opaque backing plate under the timeline fixes
+# the contrast regardless of what's behind the chip.
+_PLATE = QColor(18, 21, 28, 235)
 
 
 def _data_uri(pix: QPixmap) -> str:
@@ -62,6 +68,13 @@ def clock_pie_icon(
     painter = QPainter(pix)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
+    # Opaque plate first — see burn_timeline_icon for why (translucent chip
+    # window, so a semi-transparent fill would blend into the real desktop
+    # behind it rather than a predictable dark panel).
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(_PLATE)
+    painter.drawEllipse(0, 0, size, size)
+
     if frac_remaining is None:
         painter.setPen(_unknown_pen())
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -72,14 +85,14 @@ def clock_pie_icon(
     frac_remaining = max(0.0, min(1.0, frac_remaining))
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(_TRACK)
-    painter.drawEllipse(0, 0, size, size)
+    painter.drawEllipse(1, 1, size - 2, size - 2)
 
     if frac_remaining > 1e-4:
         painter.setBrush(color)
         # Qt pie angles are 1/16th of a degree, counter-clockwise; start at
         # 12 o'clock and sweep clockwise as the remaining slice.
         span = round(360 * 16 * frac_remaining)
-        painter.drawPie(0, 0, size, size, 90 * 16, -span)
+        painter.drawPie(1, 1, size - 2, size - 2, 90 * 16, -span)
 
     painter.end()
     return _img_tag(_data_uri(pix), size, size)
@@ -98,7 +111,10 @@ def burn_timeline_icon(
     filled up to "now", with a dot marking the projected exhaustion date —
     the prediction as a picture instead of a signed day count.
 
-    Sized and contrasted to still read at chip scale: a 3px track, a 4px dot
+    Sized and contrasted to still read at chip scale: an opaque dark plate
+    behind the whole bar (the chip window is translucent, so a merely
+    semi-transparent fill would blend into whatever is on the real desktop
+    behind it, not into a predictable dark panel), a 3px track, a 4px dot
     with a dark halo so it stays visible over light or dark fills alike.
 
     ``elapsed_frac=None`` (no cycle_end to place "now" on) draws a dashed
@@ -114,10 +130,14 @@ def burn_timeline_icon(
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     track_y = (height - bar_h) / 2
 
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(_PLATE)
+    painter.drawRoundedRect(0, 0, width, height, 3, 3)
+
     if elapsed_frac is None:
         painter.setPen(_unknown_pen())
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(0, int(track_y), width - 1, bar_h, 1, 1)
+        painter.drawRoundedRect(1, int(track_y), width - 2, bar_h, 1, 1)
         painter.end()
         return _img_tag(_data_uri(pix), width, height)
 
@@ -125,11 +145,11 @@ def burn_timeline_icon(
     elapsed_frac = max(0.0, min(1.0, elapsed_frac))
 
     painter.setBrush(_TRACK)
-    painter.drawRoundedRect(0, int(track_y), width, bar_h, 1, 1)
+    painter.drawRoundedRect(1, int(track_y), width - 2, bar_h, 1, 1)
 
     if elapsed_frac > 0:
         painter.setBrush(_ELAPSED)
-        painter.drawRoundedRect(0, int(track_y), max(3, round(width * elapsed_frac)), bar_h, 1, 1)
+        painter.drawRoundedRect(1, int(track_y), max(3, round((width - 2) * elapsed_frac)), bar_h, 1, 1)
 
     if exhaust_frac is not None:
         x = max(0.0, min(1.0, exhaust_frac)) * (width - 4) + 2.0
