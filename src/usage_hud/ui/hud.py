@@ -360,9 +360,9 @@ class WeatherPanel(QWidget):
         return f' <span style="color:{color}; font-weight:600;">{label}</span>'
 
     @staticmethod
-    def _clock_pie_html(snap: ProviderSnapshot, metric: Metric, text: str = "") -> str:
-        """Pie-wedge clock (angle = time left), always drawn, plus the
-        "Xh"/"Xd" text when there is one to show.
+    def _clock_icon_only(snap: ProviderSnapshot, metric: Metric) -> str:
+        """Pie-wedge clock (angle = time left) — no text, for the chip's
+        table cell where the reset-time text gets its own column.
 
         The wedge's color tracks USAGE severity (same scale as the % text),
         not time — a clock winding down on a nearly-full gauge should look
@@ -372,11 +372,13 @@ class WeatherPanel(QWidget):
         """
         frac = reset_fraction_remaining(snap, metric, snap.fetched_at)
         color = QColor(_pct_color(metric.resolved_percent())) if frac is not None else QColor("#5a6272")
-        pie = mini_charts.clock_pie_icon(frac, color)
-        # Leading space on the label (not a trailing one on the icon) so a
-        # caller can always join icon+text as one unit — no missing-space
-        # glue when text is "" (Claude's 5h before its first real reset is
-        # seen: the icon still renders, right up against whatever follows).
+        return mini_charts.clock_pie_icon(frac, color)
+
+    @classmethod
+    def _clock_pie_html(cls, snap: ProviderSnapshot, metric: Metric, text: str = "") -> str:
+        """Flyout use: the clock icon plus its "Xh"/"Xd" text inline (the
+        flyout gives the clock its own line, so icon+text stay one unit)."""
+        pie = cls._clock_icon_only(snap, metric)
         if text:
             return f'{pie} <span style="color:#6f7686;">{text}</span>'
         return pie
@@ -425,13 +427,6 @@ class WeatherPanel(QWidget):
             usage_pct=metric.resolved_percent(),
         )
 
-    @classmethod
-    def _timeline_html(
-        cls, snap: ProviderSnapshot, metric: Metric, proj: BurnProjection | None
-    ) -> str:
-        """Chip use: the timeline chart plus the "+9d"/"-24d" text badge."""
-        return cls._timeline_chart(snap, metric, proj) + cls._eta_html(format_chip_eta(proj))
-
     def _sparkline_html(
         self, snap: ProviderSnapshot, metric: Metric, proj: BurnProjection | None
     ) -> str:
@@ -447,14 +442,33 @@ class WeatherPanel(QWidget):
         hot = bool(proj and proj.hot)
         return mini_charts.sparkline_icon(values, color, hot=hot)
 
+    # Chip table columns: Label | Clock | Reset time | Percent | Timeline | ETA.
+    _CHIP_COLS = 6
+
+    @staticmethod
+    def _chip_cell(html: str, *, first: bool = False, right: bool = False) -> str:
+        align = " text-align:right;" if right else ""
+        pad = "0" if first else "7px"
+        return (
+            f'<td style="padding:3px 0 0 {pad}; white-space:nowrap;{align}">{html}</td>'
+        )
+
+    def _chip_row(self, *cells: str) -> str:
+        return "<tr>" + "".join(
+            self._chip_cell(c, first=(i == 0), right=(i == 3)) for i, c in enumerate(cells)
+        ) + "</tr>"
+
     def _chip_html(self) -> str:
-        # One line per gauge — cramming every provider onto a single row
-        # (joined with " · ") got unreadable once each gauge grew a clock
-        # icon and a prediction badge. A stacked chip reads left-to-right per
-        # line instead of hunting across one long strip.
+        # One table row per gauge, in fixed columns — cramming every provider
+        # onto a single inline row (joined with " · ") got unreadable once
+        # each gauge grew a clock icon and a prediction badge, and plain
+        # space-joined lines still left every column drifting left/right
+        # with its content's width. A real <table> lets Qt's rich-text engine
+        # size each column to its widest cell, so the same kind of value
+        # lines up in the same place on every row.
         etas = primary_eta_projection(self._snapshots, self._projections)
         proj_map = {(p.provider_id, p.metric_key): p for p in self._projections}
-        lines: list[str] = []
+        rows: list[str] = []
         for snap in self._snapshots:
             tag = {
                 "cursor": "Cur",
@@ -466,19 +480,25 @@ class WeatherPanel(QWidget):
                 "cloud": "Cld",
             }.get(snap.provider_id, snap.provider_id[:3].title())
             if not snap.ok:
-                lines.append(f'<span style="color:#ff8a80;">{tag} !</span>')
+                rows.append(
+                    f'<tr><td colspan="{self._CHIP_COLS}" style="padding:3px 0 0 0;">'
+                    f'<span style="color:#ff8a80;">{tag} !</span></td></tr>'
+                )
                 continue
             metrics = chip_metrics(snap)
             if not metrics:
                 eta_html = self._eta_html(format_chip_eta(etas.get(snap.provider_id)))
-                lines.append(f'<span style="color:#e8ecf4;">{tag}</span>{eta_html}')
+                rows.append(
+                    f'<tr><td colspan="{self._CHIP_COLS}" style="padding:3px 0 0 0;">'
+                    f'<span style="color:#e8ecf4;">{tag}</span>{eta_html}</td></tr>'
+                )
                 continue
 
             multi = len(metrics) > 1
             for metric in metrics:
                 pct = metric.resolved_percent()
                 color = _pct_color(pct)
-                # Multiple gauges: name each line's own gauge instead of
+                # Multiple gauges: name each row's own gauge instead of
                 # repeating just the provider tag, and give it its own ETA
                 # badge — the one that matters (e.g. API) must not hide
                 # behind another gauge's prediction.
@@ -487,24 +507,26 @@ class WeatherPanel(QWidget):
                 pct_html = (
                     f'<span style="color:{color}; font-weight:700;">{pct:.0f}%</span>'
                     if pct is not None
-                    else ""
+                    else '<span style="color:#5a6272;">—</span>'
                 )
                 proj = proj_map.get((snap.provider_id, metric.key)) if multi else etas.get(snap.provider_id)
-                timeline_html = self._timeline_html(snap, metric, proj)
-                # Explicit space-join, not bare concatenation — pct_html can
-                # be "" (unresolvable %) and own_reset is routinely "" (no
-                # known reset time), and gluing icon/text/icon directly
-                # together with no separator crowded them into each other.
-                segs = [
-                    f'<span style="color:#8a93a6;">{label}</span>',
-                    self._clock_pie_html(snap, metric, own_reset),
-                    pct_html,
-                    timeline_html,
-                ]
-                lines.append(" ".join(s for s in segs if s))
-        if not lines:
+                rows.append(
+                    self._chip_row(
+                        f'<span style="color:#8a93a6;">{label}</span>',
+                        self._clock_icon_only(snap, metric),
+                        f'<span style="color:#6f7686;">{own_reset}</span>',
+                        pct_html,
+                        self._timeline_chart(snap, metric, proj),
+                        self._eta_html(format_chip_eta(proj)),
+                    )
+                )
+        if not rows:
             return '<span style="color:#e8ecf4;">Usage …</span>'
-        return "".join(f'<div style="margin-top:3px;">{line}</div>' for line in lines)
+        return (
+            '<table cellspacing="0" cellpadding="0" style="border-collapse:collapse;">'
+            + "".join(rows)
+            + "</table>"
+        )
 
     def _flyout_html(self) -> str:
         proj_map = {(p.provider_id, p.metric_key): p for p in self._projections}
