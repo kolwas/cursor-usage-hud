@@ -1,4 +1,4 @@
-# Usage HUD
+# Przepiórka (Usage HUD)
 
 Always-visible desktop chip for every AI coding subscription you pay for — Cursor, GitHub
 Copilot, Claude, OpenAI/ChatGPT, OpenCode Go. Windows + Linux/KDE. One line per gauge, a
@@ -162,13 +162,15 @@ Cla 7d    🥧 6d     2%
 
 1. Panel needs a **System Tray** (Status Notifier) widget — Qt uses SNI; no extra Plasma applet.
 2. Same binary: `pip install -e . && usage-hud`
-3. Autostart: copy `packaging/usage-hud.desktop` to `~/.config/autostart/` and set `Exec=` to
+3. Icon (once, so `Icon=przepiorka` in the .desktop file resolves):
+   `mkdir -p ~/.local/share/icons/hicolor/256x256/apps && cp src/usage_hud/assets/przepiorka.png ~/.local/share/icons/hicolor/256x256/apps/przepiorka.png && gtk-update-icon-cache ~/.local/share/icons/hicolor 2>/dev/null`
+4. Autostart: copy `packaging/przepiorka.desktop` to `~/.config/autostart/` and set `Exec=` to
    your venv, e.g. `/home/YOU/.../cursor-usage-hud/.venv/bin/usage-hud`
-4. Auth: `~/.config/Cursor/.../state.vscdb`, `~/.local/share/opencode/auth.json`
-5. State: `~/.local/share/usage-hud/` (`providers.json`, snooze, history)
-6. Wayland + X11 OK via Qt; multi-monitor idle chip uses Qt's screens API.
-7. If the tray icon is missing: right-click panel → Add Widgets → System Tray; make sure
-   Usage HUD isn't in the "hidden" entries.
+5. Auth: `~/.config/Cursor/.../state.vscdb`, `~/.local/share/opencode/auth.json`
+6. State: `~/.local/share/usage-hud/` (`providers.json`, snooze, history)
+7. Wayland + X11 OK via Qt; multi-monitor idle chip uses Qt's screens API.
+8. If the tray icon is missing: right-click panel → Add Widgets → System Tray; make sure
+   Przepiórka isn't in the "hidden" entries.
 
 ## Setup
 

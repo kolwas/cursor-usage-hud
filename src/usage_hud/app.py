@@ -8,6 +8,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
 from usage_hud.alerts import evaluate_alerts
+from usage_hud.branding import APP_NAME, DESKTOP_FILE_NAME, app_icon
 from usage_hud.config import Settings
 from usage_hud.history import HistoryStore
 from usage_hud.providers.registry import discover_providers, visible_snapshots
@@ -125,7 +126,11 @@ class UsageHudApp:
             self.panel.show()
         elif hidden:
             self.panel.hide()
-        elif self.settings.ui_mode == "chip" and not self.panel.isVisible():
+        elif (
+            self.settings.ui_mode == "chip"
+            and not self.panel.isVisible()
+            and not self.panel._single_screen_fled  # noqa: SLF001
+        ):
             self.panel.show()
             self.panel.collapse()
             self.panel.dock_to_taskbar(force=True)
@@ -150,10 +155,11 @@ def run() -> int:
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     app.setOrganizationName("usage-hud")
-    app.setApplicationName("Usage HUD")
-    app.setApplicationDisplayName("Usage HUD")
+    app.setApplicationName(APP_NAME)
+    app.setApplicationDisplayName(APP_NAME)
+    app.setWindowIcon(app_icon())
     # Helps Plasma map the Status Notifier item to the .desktop file.
-    app.setDesktopFileName("usage-hud")
+    app.setDesktopFileName(DESKTOP_FILE_NAME)
 
     if not QSystemTrayIcon.isSystemTrayAvailable():
         print(

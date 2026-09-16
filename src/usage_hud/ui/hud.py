@@ -6,6 +6,7 @@ from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QAction,
     QColor,
+    QCursor,
     QFont,
     QGuiApplication,
     QMouseEvent,
@@ -15,6 +16,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QApplication, QLabel, QMenu, QVBoxLayout, QWidget
 
+from usage_hud.branding import APP_NAME
 from usage_hud.history import HistoryStore
 from usage_hud.models import Alert, AlertLevel, BurnProjection, Metric, ProviderSnapshot
 from usage_hud.ui import mini_charts
@@ -34,6 +36,12 @@ from usage_hud.ui.formatters import (
 )
 
 _ETA_COLOR = {"bad": "#ff8a80", "warn": "#ffb020", "ok": "#8ec8ff", "tentative": "#9aa3b2"}
+
+# Single-monitor flee: with nowhere else to jump to, the chip hides itself
+# instead — this is how far (px) the cursor can get before it's "nearby"
+# and the chip ducks out of the way, not just when directly touching it.
+_HOVER_MARGIN = 44
+_PROXIMITY_POLL_MS = 250
 
 
 def _ui_font(point_size: int = 9, bold: bool = False) -> QFont:
@@ -79,6 +87,11 @@ class WeatherPanel(QWidget):
         # from self._projections, which only carries the derived burn-rate
         # numbers, not the raw observed samples.
         self._history = history
+        # True while hidden specifically because the cursor got close on a
+        # single-monitor setup (no other screen to flee to) — distinct from
+        # every other reason the chip might be hidden (snoozed, quiet mode),
+        # so a periodic refresh doesn't force it back under the cursor.
+        self._single_screen_fled = False
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -87,7 +100,7 @@ class WeatherPanel(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setWindowOpacity(max(0.85, opacity))
-        self.setWindowTitle("Usage HUD")
+        self.setWindowTitle(APP_NAME)
         self.setMouseTracking(True)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
@@ -123,6 +136,15 @@ class WeatherPanel(QWidget):
         self._reposition_timer.timeout.connect(self._auto_dock)
         self._reposition_timer.start()
 
+        # Single-monitor flee: enterEvent can't jump the chip to "another
+        # screen" when there is only one, so a fast poll ducks it out of the
+        # way on approach instead — enterEvent alone would also only fire
+        # once the cursor is already touching the chip, not "nearby".
+        self._proximity_timer = QTimer(self)
+        self._proximity_timer.setInterval(_PROXIMITY_POLL_MS)
+        self._proximity_timer.timeout.connect(self._check_single_screen_proximity)
+        self._proximity_timer.start()
+
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
         # Pinned tray details stay open until explicit collapse — no click-away.
         if self._pinned_details:
@@ -136,20 +158,54 @@ class WeatherPanel(QWidget):
                 self.collapse()
         return super().eventFilter(obj, event)
 
-    def enterEvent(self, event) -> None:  # noqa: N802
-        # Hover → jump to another screen so it doesn't sit under the cursor.
-        if (
+    def _flee_eligible(self) -> bool:
+        return (
             self._flee_enabled
             and not self._pinned_details
             and not self._manual_pos
             and not self._expanded
             and self._drag_offset is None
-            and len(QGuiApplication.screens()) > 1
-        ):
+        )
+
+    def enterEvent(self, event) -> None:  # noqa: N802
+        # Hover → jump to another screen so it doesn't sit under the cursor.
+        if self._flee_eligible() and len(QGuiApplication.screens()) > 1:
             current = QGuiApplication.screenAt(self.frameGeometry().center())
             self._target_screen = next_screen_after(current)
             self.dock_to_taskbar(force=True)
         super().enterEvent(event)
+
+    def _check_single_screen_proximity(self) -> None:
+        """Single monitor only: enterEvent can't send the chip to "another
+        screen" that doesn't exist, so instead it hides on approach — not
+        just on direct contact, on getting within _HOVER_MARGIN — and comes
+        back once the cursor backs off. Tracked via its own flag so a
+        periodic refresh doesn't force it back under the cursor mid-flee,
+        and so any other reason it's hidden (snoozed, quiet mode) is left
+        alone — this method only ever acts on state it set itself.
+        """
+        if len(QGuiApplication.screens()) > 1:
+            self._single_screen_fled = False
+            return
+        if not self._flee_eligible():
+            if self._single_screen_fled:
+                self._single_screen_fled = False
+                self.show()
+                self.dock_to_taskbar(force=True)
+            return
+
+        near = (
+            self.frameGeometry()
+            .adjusted(-_HOVER_MARGIN, -_HOVER_MARGIN, _HOVER_MARGIN, _HOVER_MARGIN)
+            .contains(QCursor.pos())
+        )
+        if near and self.isVisible() and not self._single_screen_fled:
+            self._single_screen_fled = True
+            self.hide()
+        elif not near and self._single_screen_fled:
+            self._single_screen_fled = False
+            self.show()
+            self.dock_to_taskbar(force=True)
 
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)

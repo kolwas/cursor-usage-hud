@@ -1,9 +1,9 @@
 [Desktop Entry]
 Type=Application
-Name=Usage HUD
-Comment=Always-visible usage chip for Cursor, Copilot and OpenCode (Plasma tray + idle monitor)
+Name=Przepiórka
+Comment=Always-visible usage chip for Cursor, Copilot, Claude and OpenCode (Plasma tray + idle monitor)
 Exec=usage-hud
-Icon=utilities-system-monitor
+Icon=przepiorka
 Terminal=false
 Categories=Utility;Monitor;Qt;
 StartupNotify=false
