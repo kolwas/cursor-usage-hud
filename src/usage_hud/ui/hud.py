@@ -15,21 +15,24 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QApplication, QLabel, QMenu, QVBoxLayout, QWidget
 
-from usage_hud.models import Alert, AlertLevel, BurnProjection, ProviderSnapshot
+from usage_hud.models import Alert, AlertLevel, BurnProjection, Metric, ProviderSnapshot
+from usage_hud.ui import mini_charts
 from usage_hud.ui.display import idle_screen, next_screen_after, screen_under_cursor
 from usage_hud.ui.formatters import (
     badge_icon,
     chip_metric_tag,
     chip_metrics,
     compact_title,
+    eta_severity,
     format_chip_eta,
     format_renewal_offset,
     format_reset_eta,
     grouped_reset_etas,
     primary_eta_projection,
+    reset_fraction_remaining,
 )
 
-_CLOCK = "\U0001f550"  # 🕐 — a plain "time left" glyph, not a status color
+_ETA_COLOR = {"bad": "#ff8a80", "warn": "#ffb020", "ok": "#8ec8ff"}
 
 
 def _ui_font(point_size: int = 9, bold: bool = False) -> QFont:
@@ -347,8 +350,58 @@ class WeatherPanel(QWidget):
         if chip_eta is None:
             return ""
         label, sev = chip_eta
-        color = {"bad": "#ff8a80", "warn": "#ffb020", "ok": "#8ec8ff"}.get(sev, "#8ec8ff")
+        color = _ETA_COLOR.get(sev, "#8ec8ff")
         return f' <span style="color:{color}; font-weight:600;">{label}</span>'
+
+    @staticmethod
+    def _clock_pie_html(snap: ProviderSnapshot, metric: Metric, text: str) -> str:
+        """Pie-wedge clock (angle = time left) + the "Xh"/"Xd" text next to it.
+
+        The wedge's color tracks USAGE severity (same scale as the % text),
+        not time — a clock winding down on a nearly-full gauge should look
+        alarming even with plenty of time left, and vice versa.
+        """
+        if not text:
+            return ""
+        frac = reset_fraction_remaining(snap, metric, snap.fetched_at)
+        pie = (
+            mini_charts.clock_pie_icon(frac, QColor(_pct_color(metric.resolved_percent())))
+            if frac is not None
+            else ""
+        )
+        return f'{pie}<span style="color:#6f7686;">{text}</span> '
+
+    @staticmethod
+    def _timeline_chart_html(proj: BurnProjection | None) -> str:
+        """Tiny burn timeline: track = current cycle, filled = elapsed, dot =
+        where the burn rate projects exhaustion — "", not just a signed
+        number, when there isn't enough data to place it (proj.confident)."""
+        if (
+            proj is None
+            or proj.days_elapsed is None
+            or proj.days_left is None
+            or proj.renewal_offset_days is None
+        ):
+            return ""
+        window = proj.days_elapsed + proj.days_left
+        if window <= 0:
+            return ""
+        elapsed_frac = proj.days_elapsed / window
+        exhaust_frac = (
+            elapsed_frac + proj.days_to_exhaust / window
+            if proj.days_to_exhaust is not None
+            else None
+        )
+        marker = QColor(_ETA_COLOR.get(eta_severity(proj.renewal_offset_days), "#8ec8ff"))
+        return mini_charts.burn_timeline_icon(elapsed_frac, exhaust_frac, marker)
+
+    @classmethod
+    def _eta_chart_html(cls, proj: BurnProjection | None) -> str:
+        """The existing "+9d"/"-24d" badge with the burn timeline in front of it."""
+        text_html = cls._eta_html(format_chip_eta(proj))
+        if not text_html:
+            return ""
+        return cls._timeline_chart_html(proj) + text_html
 
     def _chip_html(self) -> str:
         # One shared badge for providers with a single chip gauge (unchanged
@@ -372,12 +425,9 @@ class WeatherPanel(QWidget):
                 continue
             metrics = chip_metrics(snap)
             if not metrics:
-                eta_html = self._eta_html(format_chip_eta(etas.get(snap.provider_id)))
+                eta_html = self._eta_chart_html(etas.get(snap.provider_id))
                 parts.append(f'<span style="color:#e8ecf4;">{tag}</span>{eta_html}')
                 continue
-
-            def _clock(text: str) -> str:
-                return f'<span style="color:#6f7686;">{_CLOCK}{text}</span> ' if text else ""
 
             # Order is always tag → clock → percent. Gauges sharing one
             # billing cycle (Cursor's Included/API/Auto) get ONE countdown at
@@ -404,22 +454,23 @@ class WeatherPanel(QWidget):
                     else ""
                 )
                 seg_eta = (
-                    self._eta_html(format_chip_eta(proj_map.get((snap.provider_id, metric.key))))
+                    self._eta_chart_html(proj_map.get((snap.provider_id, metric.key)))
                     if multi
                     else ""
                 )
                 segs.append(
                     f'<span style="color:#8a93a6;">{seg_tag}</span> '
-                    f"{_clock(own_reset)}{pct_html}{seg_eta}".rstrip()
+                    f"{self._clock_pie_html(snap, metric, own_reset)}{pct_html}{seg_eta}".rstrip()
                 )
             body = f'<span style="color:#3a4152;">/</span>'.join(segs)
             prefix_bits = []
             if multi:
                 prefix_bits.append(f'<span style="color:#d7dde8;">{tag}</span>')
             if multi and shared_reset:
-                prefix_bits.append(_clock(shared_reset).rstrip())
+                # Any shown gauge gives the same fraction — they share one cycle.
+                prefix_bits.append(self._clock_pie_html(snap, metrics[0], shared_reset).rstrip())
             prefix = " ".join(prefix_bits) + (" " if prefix_bits else "")
-            eta_html = "" if multi else self._eta_html(format_chip_eta(etas.get(snap.provider_id)))
+            eta_html = "" if multi else self._eta_chart_html(etas.get(snap.provider_id))
             parts.append(prefix + body + eta_html)
         if not parts:
             return '<span style="color:#e8ecf4;">Usage …</span>'
@@ -448,8 +499,8 @@ class WeatherPanel(QWidget):
             shared_reset, per_metric_reset = grouped_reset_etas(snap, snap.metrics)
             if shared_reset:
                 parts.append(
-                    f'<div style="margin-top:6px; font-size:10px; color:#6f7686; '
-                    f'letter-spacing:0.3px;">{_CLOCK} {shared_reset}</div>'
+                    f'<div style="margin-top:6px; font-size:10px;">'
+                    f"{self._clock_pie_html(snap, snap.metrics[0], shared_reset)}</div>"
                 )
             for metric in snap.metrics:
                 pct = metric.resolved_percent()
@@ -466,8 +517,8 @@ class WeatherPanel(QWidget):
                 reset_eta = "" if shared_reset else per_metric_reset.get(metric.key, "")
                 if reset_eta:
                     parts.append(
-                        f'<div style="margin-top:7px; font-size:10px; color:#6f7686; '
-                        f'letter-spacing:0.3px;">{_CLOCK} {reset_eta}</div>'
+                        f'<div style="margin-top:7px; font-size:10px;">'
+                        f"{self._clock_pie_html(snap, metric, reset_eta)}</div>"
                     )
                 parts.append(
                     f'<div style="margin-top:{1 if reset_eta else 3}px; font-size:11px; '
@@ -498,9 +549,10 @@ class WeatherPanel(QWidget):
                     if proj.projected_cycle_end is not None:
                         bits.append(f"→{proj.projected_cycle_end:.0f}% at reset")
                     if bits:
+                        chart = self._timeline_chart_html(proj)
                         parts.append(
                             f'<div style="font-size:10px; color:#7a8290;">'
-                            f"{_escape(' · '.join(bits))}</div>"
+                            f"{chart}{_escape(' · '.join(bits))}</div>"
                         )
         if self._alerts:
             top = self._alerts[0]

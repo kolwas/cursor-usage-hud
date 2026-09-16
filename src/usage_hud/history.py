@@ -291,6 +291,7 @@ class HistoryStore:
                         note=note,
                         days_to_exhaust=days_to_exhaust,
                         renewal_offset_days=renewal_offset,
+                        days_elapsed=elapsed_since_start,
                     )
                 )
         return out

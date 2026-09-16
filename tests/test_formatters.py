@@ -4,9 +4,11 @@ from usage_hud.models import Alert, AlertLevel, Metric, ProviderSnapshot, utc_no
 from usage_hud.ui.formatters import (
     chip_metric_tag,
     chip_metrics,
+    eta_severity,
     format_reset_eta,
     grouped_reset_etas,
     icon_severity,
+    reset_fraction_remaining,
 )
 
 NOW = datetime(2026, 9, 15, 12, tzinfo=timezone.utc)
@@ -160,3 +162,52 @@ def test_rolling_windows_each_keep_their_own_countdown():
     shared, per_metric = grouped_reset_etas(snap, snap.metrics, NOW)
     assert shared == ""
     assert per_metric == {"five_hour": "3h14m", "seven_day": "6d"}
+
+
+def test_eta_severity_thresholds():
+    assert eta_severity(-5) == "bad"
+    assert eta_severity(-1.01) == "bad"
+    assert eta_severity(-1) == "warn"
+    assert eta_severity(0) == "warn"
+    assert eta_severity(3) == "warn"
+    assert eta_severity(3.01) == "ok"
+    assert eta_severity(40) == "ok"
+
+
+def test_reset_fraction_remaining_for_a_window_with_a_known_start():
+    """3h14m left of a 5h window is roughly 0.65 remaining."""
+    cycle_end = NOW + timedelta(hours=3, minutes=14)
+    cycle_start = cycle_end - timedelta(hours=5)
+    snap = ProviderSnapshot(
+        provider_id="anthropic", title="Claude", ok=True, fetched_at=NOW,
+        cycle_start=cycle_start,
+    )
+    metric = Metric(
+        key="five_hour", label="5h", used=35, limit=100, unit="%", percent_used=35,
+        cycle_end=cycle_end,
+    )
+    frac = reset_fraction_remaining(snap, metric, NOW)
+    assert frac is not None
+    assert 0.6 < frac < 0.7
+
+
+def test_reset_fraction_remaining_is_none_without_a_cycle_end():
+    snap = ProviderSnapshot(provider_id="cursor", title="Cursor", ok=True, fetched_at=NOW)
+    metric = Metric(key="included", label="Included", used=10, limit=100, unit="%", percent_used=10)
+    assert reset_fraction_remaining(snap, metric, NOW) is None
+
+
+def test_reset_fraction_remaining_is_clamped_to_0_1():
+    # A window that should already have rolled (now past cycle_end) must not
+    # report a negative or >1 fraction.
+    cycle_end = NOW - timedelta(hours=1)
+    snap = ProviderSnapshot(
+        provider_id="anthropic", title="Claude", ok=True, fetched_at=NOW,
+        cycle_start=cycle_end - timedelta(hours=5),
+    )
+    metric = Metric(
+        key="five_hour", label="5h", used=99, limit=100, unit="%", percent_used=99,
+        cycle_end=cycle_end,
+    )
+    frac = reset_fraction_remaining(snap, metric, NOW)
+    assert frac is None or 0.0 <= frac <= 1.0

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 
+from usage_hud.cycle import infer_cycle_start
 from usage_hud.models import Alert, AlertLevel, BurnProjection, Metric, ProviderSnapshot
 
 # Providers whose compact chip shows more than one gauge at once — short-term
@@ -103,6 +104,16 @@ def grouped_reset_etas(
     return "", per_metric
 
 
+def eta_severity(renewal_offset_days: float) -> str:
+    """bad|warn|ok for a signed days-vs-renewal offset — shared by the text
+    badge and the timeline chart's exhaustion-marker color, so both agree."""
+    if renewal_offset_days < -1:
+        return "bad"
+    if renewal_offset_days <= 3:
+        return "warn"
+    return "ok"
+
+
 def format_chip_eta(proj: BurnProjection | None) -> tuple[str, str] | None:
     """Chip badge: signed days vs renewal at current burn (+ after / − before).
 
@@ -113,16 +124,34 @@ def format_chip_eta(proj: BurnProjection | None) -> tuple[str, str] | None:
     label = format_renewal_offset(proj.renewal_offset_days)
     if label is None:
         return None
-    off = proj.renewal_offset_days
-    if off < -1:
-        sev = "bad"
-    elif off < 0:
-        sev = "warn"
-    elif off <= 3:
-        sev = "warn"
-    else:
-        sev = "ok"
-    return label, sev
+    return label, eta_severity(proj.renewal_offset_days)
+
+
+def reset_fraction_remaining(
+    snap: ProviderSnapshot, metric: Metric, now: datetime | None = None
+) -> float | None:
+    """Fraction of THIS gauge's window still left (1.0 = just opened, 0 = about
+    to roll) — drives the pie-clock's wedge. Uses the same cycle_start
+    inference as the burn-rate math (cycle.infer_cycle_start), so it works
+    from the very first sample, not only once history has accumulated.
+    """
+    cycle_end = metric.cycle_end or snap.cycle_end
+    if cycle_end is None:
+        return None
+    now = now or snap.fetched_at
+    cycle_start = infer_cycle_start(
+        cycle_end=cycle_end,
+        cycle_start=metric.cycle_start or snap.cycle_start,
+        percent_used=metric.resolved_percent(),
+        now=now,
+    )
+    if cycle_start is None:
+        return None
+    total = (cycle_end - cycle_start).total_seconds()
+    if total <= 0:
+        return None
+    remaining = (cycle_end - now).total_seconds()
+    return max(0.0, min(1.0, remaining / total))
 
 
 def primary_eta_projection(

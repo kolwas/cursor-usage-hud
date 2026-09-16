@@ -93,3 +93,6 @@ class BurnProjection:
     days_to_exhaust: float | None = None
     # days_to_exhaust − days until renewal: −1 = one day before reset.
     renewal_offset_days: float | None = None
+    # Days since this window/cycle opened — with days_left, gives the mini
+    # timeline chart its "now" position on the cycle_start..cycle_end axis.
+    days_elapsed: float | None = None
