@@ -16,12 +16,13 @@ from __future__ import annotations
 import base64
 
 from PySide6.QtCore import QBuffer, QIODevice, QPointF, Qt
-from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QPainter, QPen, QPixmap, QPolygonF
 
 _TRACK = QColor(255, 255, 255, 90)
 _ELAPSED = QColor(235, 238, 245, 255)
 _UNKNOWN = QColor(255, 255, 255, 120)
 _DOT_HALO = QColor(12, 14, 20, 210)
+_HOT = QColor(255, 61, 61, 255)
 # The chip window is translucent (WA_TranslucentBackground) — whatever is on
 # the real desktop shows through it. A semi-transparent bar blends into
 # THAT, not into a predictable dark panel, so on a light or busy background
@@ -166,6 +167,88 @@ def burn_timeline_icon(
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawEllipse(center, 3.0, 3.0)
+
+    painter.end()
+    return _img_tag(_data_uri(pix), width, height)
+
+
+def sparkline_icon(
+    values: list[float],
+    color: QColor,
+    *,
+    hot: bool = False,
+    width: int = 54,
+    height: int = 16,
+) -> str:
+    """The real observed history, not the synthetic cycle-position math the
+    clock/timeline use: a small 0-100% line of actual percent-used samples
+    over whatever window the caller queried from HistoryStore.series().
+
+    Fewer than 2 points (nothing recorded yet) draws an empty dashed plate —
+    same shape as the other two "no data yet" states, never a blank gap.
+
+    ``hot=True`` (today's usage is spiking well past the average pace, the
+    same condition that fires the CRITICAL "burning hot" tray alert) adds a
+    solid red spike-triangle badge in the corner — a small procedural shape
+    rather than an emoji, since a skull glyph would just blur into a colored
+    dot at this pixel scale.
+    """
+    pix = QPixmap(width, height)
+    pix.fill(QColor(0, 0, 0, 0))
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(_PLATE)
+    painter.drawRoundedRect(0, 0, width, height, 3, 3)
+
+    pad = 2.0
+    if len(values) < 2:
+        pen = _unknown_pen()
+        painter.setPen(pen)
+        painter.drawLine(QPointF(pad, height - pad), QPointF(width - pad, height - pad))
+        painter.end()
+        return _img_tag(_data_uri(pix), width, height)
+
+    lo, hi = min(values), max(values)
+    span = max(hi - lo, 1e-6)
+    plot_w = width - 2 * pad
+    plot_h = height - 2 * pad
+    n = len(values)
+
+    def point(i: int, v: float) -> QPointF:
+        x = pad + (plot_w * i / (n - 1) if n > 1 else 0.0)
+        y = pad + plot_h * (1.0 - (v - lo) / span)
+        return QPointF(x, y)
+
+    pts = [point(i, v) for i, v in enumerate(values)]
+
+    pen = QPen(color)
+    pen.setWidthF(1.4)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    for a, b in zip(pts, pts[1:]):
+        painter.drawLine(a, b)
+
+    # Mark "now" (the last sample) so the current level is unambiguous even
+    # when the line is nearly flat.
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(_DOT_HALO)
+    painter.drawEllipse(pts[-1], 2.6, 2.6)
+    painter.setBrush(color)
+    painter.drawEllipse(pts[-1], 1.7, 1.7)
+
+    if hot:
+        bs = 6.0
+        bx, by = width - bs - 1.0, 1.0
+        triangle = QPolygonF(
+            [QPointF(bx + bs / 2, by), QPointF(bx, by + bs), QPointF(bx + bs, by + bs)]
+        )
+        painter.setBrush(_DOT_HALO)
+        painter.drawEllipse(QPointF(bx + bs / 2, by + bs / 2), bs * 0.75, bs * 0.75)
+        painter.setBrush(_HOT)
+        painter.drawPolygon(triangle)
 
     painter.end()
     return _img_tag(_data_uri(pix), width, height)

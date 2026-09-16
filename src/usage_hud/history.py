@@ -13,6 +13,9 @@ from usage_hud.models import BurnProjection, Metric, ProviderSnapshot
 # Ignore noisy first/last-sample rates shorter than this.
 _MIN_ELAPSED_DAYS = 0.25  # 6 hours
 _SKIP_KEYS = frozenset({"ondemand"})
+# ~8 days of history at the default 180s refresh — enough to cover a whole
+# Claude 7d weekly window on the sparkline, not just the burn-rate math.
+_MAX_SAMPLES = 8000
 
 # A window near its own reset gives an unstable rate: 2% used in the first
 # hour of a 7-day window extrapolates to "14%/day", which looks like an
@@ -127,9 +130,43 @@ class HistoryStore:
                 ],
             }
             samples.append(entry)
-        if len(samples) > 4000:
-            data["samples"] = samples[-4000:]
+        if len(samples) > _MAX_SAMPLES:
+            data["samples"] = samples[-_MAX_SAMPLES:]
         self._write(data)
+
+    def series(
+        self,
+        provider_id: str,
+        metric_key: str,
+        *,
+        since: datetime | None = None,
+        max_points: int | None = None,
+    ) -> list[tuple[datetime, float]]:
+        """(timestamp, percent_used) history for one gauge, oldest first —
+        the real, observed trend a sparkline draws, as opposed to the
+        synthetic cycle-position math the pie/timeline charts use.
+
+        ``max_points`` evenly subsamples a long run down to a chart-sized
+        count (raw 180s-interval samples over days would otherwise vastly
+        outnumber the pixels available to draw them) while always keeping
+        the first and last point, so the plotted range never shrinks.
+        """
+        out: list[tuple[datetime, float]] = []
+        for s in self._read().get("samples") or []:
+            if s.get("provider_id") != provider_id:
+                continue
+            pct = _metric_level(s, metric_key)
+            if pct is None:
+                continue
+            ts = _parse_ts(s["ts"])
+            if since is not None and ts < since:
+                continue
+            out.append((ts, pct))
+        if max_points is not None and len(out) > max_points > 1:
+            step = (len(out) - 1) / (max_points - 1)
+            idxs = sorted({round(i * step) for i in range(max_points)})
+            out = [out[i] for i in idxs]
+        return out
 
     def projections(
         self,
@@ -295,6 +332,7 @@ class HistoryStore:
                         renewal_offset_days=renewal_offset,
                         days_elapsed=elapsed_since_start,
                         confident=confident,
+                        hot=hot,
                     )
                 )
         return out

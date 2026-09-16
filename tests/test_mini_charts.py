@@ -73,3 +73,32 @@ def test_unconfident_exhaustion_dot_is_drawn_differently_from_a_confident_one():
     confident = mini_charts.burn_timeline_icon(0.3, 0.6, QColor("#ff8a80"), confident=True)
     tentative = mini_charts.burn_timeline_icon(0.3, 0.6, QColor("#ff8a80"), confident=False)
     assert confident != tentative
+
+
+def test_sparkline_with_too_few_points_draws_a_placeholder():
+    mini_charts = _import_mini_charts()
+    for values in ([], [42.0]):
+        tag = mini_charts.sparkline_icon(values, QColor("#5ddea0"))
+        assert tag.startswith('<img src="data:image/png;base64,')
+
+
+def test_sparkline_renders_a_real_trend():
+    mini_charts = _import_mini_charts()
+    tag = mini_charts.sparkline_icon([2.0, 5.0, 4.0, 11.0, 30.0], QColor("#ffb020"))
+    assert tag.startswith('<img src="data:image/png;base64,')
+
+
+def test_sparkline_flat_line_still_renders():
+    """A flat trend (min == max) must not divide by zero when scaling."""
+    mini_charts = _import_mini_charts()
+    tag = mini_charts.sparkline_icon([10.0, 10.0, 10.0], QColor("#5ddea0"))
+    assert "data:image/png;base64," in tag
+
+
+def test_hot_spike_badge_is_visually_distinct():
+    """The spike badge must actually change the rendered image, not just be
+    accepted as a no-op parameter."""
+    mini_charts = _import_mini_charts()
+    calm = mini_charts.sparkline_icon([5.0, 6.0, 7.0], QColor("#5ddea0"), hot=False)
+    spiking = mini_charts.sparkline_icon([5.0, 6.0, 7.0], QColor("#5ddea0"), hot=True)
+    assert calm != spiking

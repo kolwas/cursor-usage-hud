@@ -142,3 +142,69 @@ def test_no_cycle_length_known_is_left_unconstrained(tmp_path):
     )
     proj = _proj(store, snap, key="included")
     assert proj.note == "collecting history…"
+
+
+def _cursor_snap(now: datetime, used: float) -> ProviderSnapshot:
+    return ProviderSnapshot(
+        provider_id="cursor",
+        title="Cursor",
+        ok=True,
+        fetched_at=now,
+        cycle_start=now - timedelta(days=10),
+        cycle_end=now + timedelta(days=20),
+        metrics=[
+            Metric(key="included", label="Included", used=used, limit=100.0, unit="%", percent_used=used)
+        ],
+    )
+
+
+def test_series_returns_the_raw_recorded_points_oldest_first(tmp_path):
+    store = HistoryStore(tmp_path / "history.json")
+    store.record([_cursor_snap(NOW - timedelta(hours=2), 10.0)])
+    store.record([_cursor_snap(NOW - timedelta(hours=1), 20.0)])
+    store.record([_cursor_snap(NOW, 30.0)])
+
+    points = store.series("cursor", "included")
+    assert [v for _, v in points] == [10.0, 20.0, 30.0]
+    assert points[0][0] < points[1][0] < points[2][0]
+
+
+def test_series_max_points_keeps_the_first_and_last(tmp_path):
+    store = HistoryStore(tmp_path / "history.json")
+    for i in range(50):
+        store.record([_cursor_snap(NOW - timedelta(minutes=50 - i), float(i))])
+
+    points = store.series("cursor", "included", max_points=10)
+    assert len(points) <= 10
+    assert points[0][1] == 0.0
+    assert points[-1][1] == 49.0
+
+
+def test_sudden_spike_today_is_flagged_hot(tmp_path):
+    """A pace far above the historical average today must set hot=True —
+    it drives both the CRITICAL alert and the sparkline's spike badge."""
+    store = HistoryStore(tmp_path / "history.json")
+    day_start = NOW.replace(hour=0, minute=0, second=0, microsecond=0)
+    # A slow, steady history over the past several days...
+    store.record([_cursor_snap(NOW - timedelta(days=3), 5.0)])
+    # ...then a sudden jump earlier today...
+    store.record([_cursor_snap(day_start + timedelta(minutes=1), 6.0)])
+    # ...and a big spike just now.
+    snap = _cursor_snap(NOW, 40.0)
+    store.record([snap])
+
+    proj = _proj(store, snap, key="included")
+    assert proj.hot is True
+    assert "burning hot" in proj.note
+
+
+def test_steady_pace_is_not_flagged_hot(tmp_path):
+    store = HistoryStore(tmp_path / "history.json")
+    day_start = NOW.replace(hour=0, minute=0, second=0, microsecond=0)
+    store.record([_cursor_snap(NOW - timedelta(days=3), 5.0)])
+    store.record([_cursor_snap(day_start + timedelta(minutes=1), 10.0)])
+    snap = _cursor_snap(NOW, 11.0)
+    store.record([snap])
+
+    proj = _proj(store, snap, key="included")
+    assert proj.hot is False

@@ -100,3 +100,7 @@ class BurnProjection:
     # the projection fields below are still populated (never hidden), just
     # to be rendered as a tentative/muted estimate rather than a verdict.
     confident: bool = True
+    # True = today's usage is spiking well past the average pace — drives
+    # both the CRITICAL "burning hot" alert and a skull marker on the
+    # sparkline, so a sudden spike is flagged in both places at once.
+    hot: bool = False

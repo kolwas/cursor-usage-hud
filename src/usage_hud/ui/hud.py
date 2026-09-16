@@ -15,6 +15,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QApplication, QLabel, QMenu, QVBoxLayout, QWidget
 
+from usage_hud.history import HistoryStore
 from usage_hud.models import Alert, AlertLevel, BurnProjection, Metric, ProviderSnapshot
 from usage_hud.ui import mini_charts
 from usage_hud.ui.display import idle_screen, next_screen_after, screen_under_cursor
@@ -63,7 +64,7 @@ class WeatherPanel(QWidget):
     # minutes; None = forever
     hide_requested = Signal(object)
 
-    def __init__(self, opacity: float = 0.96) -> None:
+    def __init__(self, opacity: float = 0.96, history: HistoryStore | None = None) -> None:
         super().__init__()
         self._expanded = False
         self._drag_offset: QPoint | None = None
@@ -74,6 +75,10 @@ class WeatherPanel(QWidget):
         self._snapshots: list[ProviderSnapshot] = []
         self._projections: list[BurnProjection] = []
         self._alerts: list[Alert] = []
+        # For the flyout's real sparkline (HistoryStore.series()) — distinct
+        # from self._projections, which only carries the derived burn-rate
+        # numbers, not the raw observed samples.
+        self._history = history
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -416,6 +421,21 @@ class WeatherPanel(QWidget):
         """Chip use: the timeline chart plus the "+9d"/"-24d" text badge."""
         return cls._timeline_chart(snap, metric, proj) + cls._eta_html(format_chip_eta(proj))
 
+    def _sparkline_html(
+        self, snap: ProviderSnapshot, metric: Metric, proj: BurnProjection | None
+    ) -> str:
+        """Flyout-only: the real observed % history for this gauge, with a
+        spike badge when today's pace triggered the "burning hot" alert."""
+        if self._history is None:
+            return ""
+        points = self._history.series(snap.provider_id, metric.key, max_points=40)
+        if len(points) < 2:
+            return ""
+        values = [v for _, v in points]
+        color = QColor(_pct_color(metric.resolved_percent()))
+        hot = bool(proj and proj.hot)
+        return mini_charts.sparkline_icon(values, color, hot=hot)
+
     def _chip_html(self) -> str:
         # One line per gauge — cramming every provider onto a single row
         # (joined with " · ") got unreadable once each gauge grew a clock
@@ -548,6 +568,9 @@ class WeatherPanel(QWidget):
                     f'<div style="margin-top:2px; font-size:10px; color:#7a8290;">'
                     f"{chart}{bits_html}</div>"
                 )
+                spark = self._sparkline_html(snap, metric, proj)
+                if spark:
+                    parts.append(f'<div style="margin-top:3px;">{spark}</div>')
         if self._alerts:
             top = self._alerts[0]
             color = {

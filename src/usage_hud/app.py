@@ -29,7 +29,7 @@ class UsageHudApp:
         self.snooze_store = SnoozeStore(settings.state_dir / "snooze.json")
         self._snooze = self.snooze_store.load()
 
-        self.panel = WeatherPanel(opacity=settings.opacity)
+        self.panel = WeatherPanel(opacity=settings.opacity, history=self.history)
         self.panel.hide_requested.connect(self.hide_to_tray)
 
         self.tray = TrayController(
