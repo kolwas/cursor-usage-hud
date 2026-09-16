@@ -10,40 +10,29 @@ from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from usage_hud.cycle import infer_cycle_start
 from usage_hud.models import Alert, AlertLevel, BurnProjection, Metric, ProviderSnapshot
 
-# Providers whose compact chip shows more than one gauge at once — short-term
-# and long-term (or Included vs. API) side by side, so both are visible
-# without expanding.
-CHIP_METRIC_KEYS: dict[str, tuple[str, ...]] = {
-    "anthropic": ("five_hour", "seven_day"),
-    "cursor": ("included", "api"),
-}
-
-# Compact tag for a metric when several share one chip segment — the full
-# Metric.label (e.g. "Included plan") stays as-is everywhere else (flyout,
-# tray tooltip); only the small always-visible chip needs it this short.
+# Compact tag for a metric on the chip — the full Metric.label (e.g.
+# "Included plan") stays as-is everywhere else (flyout, tray tooltip); only
+# the small always-visible chip needs it this short.
 _CHIP_METRIC_TAG: dict[str, str] = {
     "included": "Incl",
     "api": "API",
     "auto": "Auto",
+    "ondemand": "OnDemand",
     "five_hour": "5h",
     "seven_day": "7d",
     "seven_day_opus": "7d Opus",
+    "primary_window": "Primary",
+    "secondary_window": "Daily",
+    "rolling": "5h",
+    "weekly": "Weekly",
+    "monthly": "Monthly",
 }
 
 
 def chip_metrics(snap: ProviderSnapshot) -> list[Metric]:
-    """Gauges to show in the small chip — several for CHIP_METRIC_KEYS providers,
-    else just the first metric with a resolvable percent."""
-    keys = CHIP_METRIC_KEYS.get(snap.provider_id)
-    if keys:
-        by_key = {m.key: m for m in snap.metrics}
-        chosen = [by_key[k] for k in keys if k in by_key]
-        if chosen:
-            return chosen
-    for metric in snap.metrics:
-        if metric.resolved_percent() is not None:
-            return [metric]
-    return []
+    """Every gauge worth a chip row: all of them, always, not just the first —
+    each gets its own line, its own clock and its own prediction."""
+    return [m for m in snap.metrics if m.resolved_percent() is not None]
 
 
 def chip_metric_tag(metric: Metric) -> str:

@@ -4,6 +4,11 @@ QLabel's RichText engine has no CSS gradients/canvas, so these are rasterized
 with QPainter and handed back as ``data:image/png;base64,...`` strings to drop
 straight into an ``<img>`` tag. Sizes are chip-scale (a few px), not dashboard
 widgets.
+
+Both charts are drawn for EVERY gauge, always, in the same size and position —
+even when there isn't enough data yet. A dashed/hollow "unknown" rendering
+(``frac=None``) keeps every row the same shape instead of some rows having an
+icon and others not, which used to make the chip jump around.
 """
 
 from __future__ import annotations
@@ -11,10 +16,11 @@ from __future__ import annotations
 import base64
 
 from PySide6.QtCore import QBuffer, QIODevice, QPointF, Qt
-from PySide6.QtGui import QColor, QPainter, QPixmap
+from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 
 _TRACK = QColor(255, 255, 255, 36)
 _ELAPSED = QColor(255, 255, 255, 100)
+_UNKNOWN = QColor(255, 255, 255, 60)
 
 
 def _data_uri(pix: QPixmap) -> str:
@@ -29,6 +35,13 @@ def _img_tag(data_uri: str, width: int, height: int, *, valign: str = "middle") 
     return f'<img src="{data_uri}" width="{width}" height="{height}" style="vertical-align:{valign};">'
 
 
+def _unknown_pen() -> QPen:
+    pen = QPen(_UNKNOWN)
+    pen.setStyle(Qt.PenStyle.DashLine)
+    pen.setWidthF(1.1)
+    return pen
+
+
 def clock_pie_icon(
     frac_remaining: float | None, color: QColor, *, size: int = 12
 ) -> str:
@@ -38,17 +51,25 @@ def clock_pie_icon(
     COLOR tracks usage severity — the two are independent, as asked: a clock
     running down safely stays green, one running down while nearly full
     turns red, regardless of how much time remains.
-    """
-    if frac_remaining is None:
-        frac_remaining = 1.0
-    frac_remaining = max(0.0, min(1.0, frac_remaining))
 
+    ``frac_remaining=None`` (we don't know when this window resets) draws a
+    dashed hollow ring instead of guessing — visually distinct from a
+    genuine 0% (solid, empty) or 100% (solid, full) wedge.
+    """
     pix = QPixmap(size, size)
     pix.fill(QColor(0, 0, 0, 0))
     painter = QPainter(pix)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setPen(Qt.PenStyle.NoPen)
 
+    if frac_remaining is None:
+        painter.setPen(_unknown_pen())
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(1, 1, size - 2, size - 2)
+        painter.end()
+        return _img_tag(_data_uri(pix), size, size)
+
+    frac_remaining = max(0.0, min(1.0, frac_remaining))
+    painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(_TRACK)
     painter.drawEllipse(0, 0, size, size)
 
@@ -64,7 +85,7 @@ def clock_pie_icon(
 
 
 def burn_timeline_icon(
-    elapsed_frac: float,
+    elapsed_frac: float | None,
     exhaust_frac: float | None,
     marker_color: QColor,
     *,
@@ -74,16 +95,27 @@ def burn_timeline_icon(
     """A tiny horizontal timeline: cycle_start..cycle_end as the full bar,
     filled up to "now", with a dot marking the projected exhaustion date —
     the prediction as a picture instead of a signed day count.
-    """
-    elapsed_frac = max(0.0, min(1.0, elapsed_frac))
 
+    ``elapsed_frac=None`` (no cycle_end to place "now" on) draws a dashed
+    empty track — same size and position as every other row's timeline, just
+    with nothing plotted on it yet.
+    """
     pix = QPixmap(width, height)
     pix.fill(QColor(0, 0, 0, 0))
     painter = QPainter(pix)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setPen(Qt.PenStyle.NoPen)
-
     track_y = height / 2 - 1
+
+    if elapsed_frac is None:
+        painter.setPen(_unknown_pen())
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(0, int(track_y), width - 1, 2, 1, 1)
+        painter.end()
+        return _img_tag(_data_uri(pix), width, height)
+
+    painter.setPen(Qt.PenStyle.NoPen)
+    elapsed_frac = max(0.0, min(1.0, elapsed_frac))
+
     painter.setBrush(_TRACK)
     painter.drawRoundedRect(0, int(track_y), width, 2, 1, 1)
 

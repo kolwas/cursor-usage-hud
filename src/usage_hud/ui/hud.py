@@ -355,54 +355,57 @@ class WeatherPanel(QWidget):
         return f' <span style="color:{color}; font-weight:600;">{label}</span>'
 
     @staticmethod
-    def _clock_pie_html(snap: ProviderSnapshot, metric: Metric, text: str) -> str:
-        """Pie-wedge clock (angle = time left) + the "Xh"/"Xd" text next to it.
+    def _clock_pie_html(snap: ProviderSnapshot, metric: Metric, text: str = "") -> str:
+        """Pie-wedge clock (angle = time left), always drawn, plus the
+        "Xh"/"Xd" text when there is one to show.
 
         The wedge's color tracks USAGE severity (same scale as the % text),
         not time — a clock winding down on a nearly-full gauge should look
-        alarming even with plenty of time left, and vice versa.
+        alarming even with plenty of time left, and vice versa. Unknown time
+        (frac=None) draws a dashed hollow ring instead of nothing, so every
+        row keeps the same shape.
         """
-        if not text:
-            return ""
         frac = reset_fraction_remaining(snap, metric, snap.fetched_at)
-        pie = (
-            mini_charts.clock_pie_icon(frac, QColor(_pct_color(metric.resolved_percent())))
-            if frac is not None
-            else ""
-        )
-        return f'{pie}<span style="color:#6f7686;">{text}</span> '
+        color = QColor(_pct_color(metric.resolved_percent())) if frac is not None else QColor("#5a6272")
+        pie = mini_charts.clock_pie_icon(frac, color)
+        label = f'<span style="color:#6f7686;">{text}</span> ' if text else ""
+        return f"{pie}{label}"
 
     @staticmethod
-    def _timeline_chart_html(proj: BurnProjection | None) -> str:
-        """Tiny burn timeline: track = current cycle, filled = elapsed, dot =
-        where the burn rate projects exhaustion — "", not just a signed
-        number, when there isn't enough data to place it (proj.confident)."""
+    def _timeline_chart(
+        snap: ProviderSnapshot, metric: Metric, proj: BurnProjection | None
+    ) -> str:
+        """Tiny burn timeline image, always drawn: track = current cycle,
+        filled = elapsed so far (from the same cycle inference as the clock,
+        so it never needs burn-rate history to appear), dot = where the burn
+        rate projects exhaustion once there is a confident prediction.
+        """
+        frac_remaining = reset_fraction_remaining(snap, metric, snap.fetched_at)
+        elapsed_frac = None if frac_remaining is None else max(0.0, 1.0 - frac_remaining)
+        exhaust_frac = None
+        marker = QColor("#5a6272")
+
         if (
-            proj is None
-            or proj.days_elapsed is None
-            or proj.days_left is None
-            or proj.renewal_offset_days is None
+            proj is not None
+            and proj.days_elapsed is not None
+            and proj.days_left is not None
+            and proj.renewal_offset_days is not None
+            and (proj.days_elapsed + proj.days_left) > 0
         ):
-            return ""
-        window = proj.days_elapsed + proj.days_left
-        if window <= 0:
-            return ""
-        elapsed_frac = proj.days_elapsed / window
-        exhaust_frac = (
-            elapsed_frac + proj.days_to_exhaust / window
-            if proj.days_to_exhaust is not None
-            else None
-        )
-        marker = QColor(_ETA_COLOR.get(eta_severity(proj.renewal_offset_days), "#8ec8ff"))
+            window = proj.days_elapsed + proj.days_left
+            elapsed_frac = proj.days_elapsed / window
+            if proj.days_to_exhaust is not None:
+                exhaust_frac = elapsed_frac + proj.days_to_exhaust / window
+            marker = QColor(_ETA_COLOR.get(eta_severity(proj.renewal_offset_days), "#8ec8ff"))
+
         return mini_charts.burn_timeline_icon(elapsed_frac, exhaust_frac, marker)
 
     @classmethod
-    def _eta_chart_html(cls, proj: BurnProjection | None) -> str:
-        """The existing "+9d"/"-24d" badge with the burn timeline in front of it."""
-        text_html = cls._eta_html(format_chip_eta(proj))
-        if not text_html:
-            return ""
-        return cls._timeline_chart_html(proj) + text_html
+    def _timeline_html(
+        cls, snap: ProviderSnapshot, metric: Metric, proj: BurnProjection | None
+    ) -> str:
+        """Chip use: the timeline chart plus the "+9d"/"-24d" text badge."""
+        return cls._timeline_chart(snap, metric, proj) + cls._eta_html(format_chip_eta(proj))
 
     def _chip_html(self) -> str:
         # One line per gauge — cramming every provider onto a single row
@@ -427,7 +430,7 @@ class WeatherPanel(QWidget):
                 continue
             metrics = chip_metrics(snap)
             if not metrics:
-                eta_html = self._eta_chart_html(etas.get(snap.provider_id))
+                eta_html = self._eta_html(format_chip_eta(etas.get(snap.provider_id)))
                 lines.append(f'<span style="color:#e8ecf4;">{tag}</span>{eta_html}')
                 continue
 
@@ -447,10 +450,10 @@ class WeatherPanel(QWidget):
                     else ""
                 )
                 proj = proj_map.get((snap.provider_id, metric.key)) if multi else etas.get(snap.provider_id)
-                eta_html = self._eta_chart_html(proj)
+                timeline_html = self._timeline_html(snap, metric, proj)
                 lines.append(
                     f'<span style="color:#8a93a6;">{label}</span> '
-                    f"{self._clock_pie_html(snap, metric, own_reset)}{pct_html}{eta_html}".rstrip()
+                    f"{self._clock_pie_html(snap, metric, own_reset)}{pct_html}{timeline_html}".rstrip()
                 )
         if not lines:
             return '<span style="color:#e8ecf4;">Usage …</span>'
@@ -474,7 +477,9 @@ class WeatherPanel(QWidget):
                 continue
             # One clock for the whole provider when every gauge shares a
             # billing cycle (Cursor); one per gauge when they genuinely
-            # differ (Claude's 5h vs 7d) — always clock, then the % below it.
+            # differ (Claude's 5h vs 7d) — always drawn, even without a
+            # resolvable time (dashed = unknown), so every provider keeps
+            # the same shape here.
             shared_reset, per_metric_reset = grouped_reset_etas(snap, snap.metrics)
             if shared_reset:
                 parts.append(
@@ -493,14 +498,14 @@ class WeatherPanel(QWidget):
                 else:
                     detail = _fmt(metric.used, metric.unit)
                 bar = _bar(pct)
-                reset_eta = "" if shared_reset else per_metric_reset.get(metric.key, "")
-                if reset_eta:
+                if not shared_reset:
+                    reset_eta = per_metric_reset.get(metric.key, "")
                     parts.append(
                         f'<div style="margin-top:7px; font-size:10px;">'
                         f"{self._clock_pie_html(snap, metric, reset_eta)}</div>"
                     )
                 parts.append(
-                    f'<div style="margin-top:{1 if reset_eta else 3}px; font-size:11px; '
+                    f'<div style="margin-top:1px; font-size:11px; '
                     f'color:#aeb6c4;">{_escape(metric.label)} '
                     f'<span style="color:{color};">{pct_txt}</span></div>'
                 )
@@ -509,8 +514,8 @@ class WeatherPanel(QWidget):
                     f"{bar} {detail}</div>"
                 )
                 proj = proj_map.get((snap.provider_id, metric.key))
+                bits: list[str] = []
                 if proj and "collecting" not in (proj.note or ""):
-                    bits: list[str] = []
                     if proj.used_today:
                         bits.append(f"+{proj.used_today:.1f} today")
                     if proj.avg_daily > 0:
@@ -527,12 +532,12 @@ class WeatherPanel(QWidget):
                             bits.append("0d (at renewal)")
                     if proj.projected_cycle_end is not None:
                         bits.append(f"→{proj.projected_cycle_end:.0f}% at reset")
-                    if bits:
-                        chart = self._timeline_chart_html(proj)
-                        parts.append(
-                            f'<div style="font-size:10px; color:#7a8290;">'
-                            f"{chart}{_escape(' · '.join(bits))}</div>"
-                        )
+                chart = self._timeline_chart(snap, metric, proj)
+                bits_html = f' {_escape(" · ".join(bits))}' if bits else ""
+                parts.append(
+                    f'<div style="margin-top:2px; font-size:10px; color:#7a8290;">'
+                    f"{chart}{bits_html}</div>"
+                )
         if self._alerts:
             top = self._alerts[0]
             color = {

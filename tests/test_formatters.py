@@ -62,15 +62,17 @@ def test_claude_chip_falls_back_when_a_window_is_missing():
     assert [m.key for m in chip_metrics(snap)] == ["seven_day"]
 
 
-def test_cursor_chip_shows_included_and_api_together():
-    """API is the gauge that actually risks an overrun — Included alone used to hide it."""
+def test_chip_shows_every_gauge_with_a_resolvable_percent():
+    """Every gauge, always — Included alone used to hide API, the one that
+    actually risks an overrun; On-demand with no percent yet is skipped."""
     snap = _snap(
         "cursor",
         Metric(key="included", label="Included plan", used=11, limit=100, unit="%", percent_used=11),
         Metric(key="api", label="API models", used=70, limit=100, unit="%", percent_used=70),
         Metric(key="auto", label="Auto models", used=5, limit=100, unit="%", percent_used=5),
+        Metric(key="ondemand", label="On-demand spend", used=0, limit=None, unit="$", percent_used=None),
     )
-    assert [m.key for m in chip_metrics(snap)] == ["included", "api"]
+    assert [m.key for m in chip_metrics(snap)] == ["included", "api", "auto"]
 
 
 def test_other_providers_keep_a_single_chip_gauge():
