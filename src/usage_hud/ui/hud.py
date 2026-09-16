@@ -92,7 +92,6 @@ class WeatherPanel(QWidget):
         self._chip.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
         self._chip.setFont(_ui_font(10, bold=True))
         self._chip.setStyleSheet("color: #f3f6fb; background: transparent;")
-        self._chip.setFixedHeight(32)
         self._chip.setMouseTracking(True)
 
         self._flyout = QLabel()
@@ -333,9 +332,11 @@ class WeatherPanel(QWidget):
             self._flyout.setText(self._flyout_html())
         self.adjustSize()
         if not self._expanded:
-            self.setFixedHeight(44)
-            hint_w = self._chip.sizeHint().width() + 36
-            self.setFixedWidth(max(220, min(720, hint_w)))
+            # Chip is now one line per gauge, so its height grows with the
+            # number of gauges shown instead of staying fixed at one line.
+            chip_hint = self._chip.sizeHint()
+            self.setFixedHeight(max(40, min(220, chip_hint.height() + 16)))
+            self.setFixedWidth(max(220, min(420, chip_hint.width() + 36)))
         else:
             self.setMinimumHeight(0)
             self.setMaximumHeight(16777215)
@@ -404,12 +405,13 @@ class WeatherPanel(QWidget):
         return cls._timeline_chart_html(proj) + text_html
 
     def _chip_html(self) -> str:
-        # One shared badge for providers with a single chip gauge (unchanged
-        # behaviour); a badge per gauge for providers showing several, so e.g.
-        # Cursor's API prediction doesn't hide behind Included's.
+        # One line per gauge — cramming every provider onto a single row
+        # (joined with " · ") got unreadable once each gauge grew a clock
+        # icon and a prediction badge. A stacked chip reads left-to-right per
+        # line instead of hunting across one long strip.
         etas = primary_eta_projection(self._snapshots, self._projections)
         proj_map = {(p.provider_id, p.metric_key): p for p in self._projections}
-        parts: list[str] = []
+        lines: list[str] = []
         for snap in self._snapshots:
             tag = {
                 "cursor": "Cur",
@@ -421,61 +423,38 @@ class WeatherPanel(QWidget):
                 "cloud": "Cld",
             }.get(snap.provider_id, snap.provider_id[:3].title())
             if not snap.ok:
-                parts.append(f'<span style="color:#ff8a80;">{tag} !</span>')
+                lines.append(f'<span style="color:#ff8a80;">{tag} !</span>')
                 continue
             metrics = chip_metrics(snap)
             if not metrics:
                 eta_html = self._eta_chart_html(etas.get(snap.provider_id))
-                parts.append(f'<span style="color:#e8ecf4;">{tag}</span>{eta_html}')
+                lines.append(f'<span style="color:#e8ecf4;">{tag}</span>{eta_html}')
                 continue
 
-            # Order is always tag → clock → percent. Gauges sharing one
-            # billing cycle (Cursor's Included/API/Auto) get ONE countdown at
-            # the provider tag instead of repeating it per gauge; gauges with
-            # genuinely different resets (Claude's 5h vs 7d) get their own.
             multi = len(metrics) > 1
-            shared_reset, per_metric_reset = grouped_reset_etas(snap, metrics) if multi else ("", {})
-
-            segs: list[str] = []
             for metric in metrics:
                 pct = metric.resolved_percent()
                 color = _pct_color(pct)
-                # Multiple gauges: label each one instead of repeating the
-                # provider tag, and give each its own ETA badge — the one
-                # that matters (e.g. API) must not hide behind another's.
-                seg_tag = chip_metric_tag(metric) if multi else tag
-                if multi:
-                    own_reset = "" if shared_reset else per_metric_reset.get(metric.key, "")
-                else:
-                    own_reset = format_reset_eta(metric.cycle_end or snap.cycle_end, snap.fetched_at)
+                # Multiple gauges: name each line's own gauge instead of
+                # repeating just the provider tag, and give it its own ETA
+                # badge — the one that matters (e.g. API) must not hide
+                # behind another gauge's prediction.
+                label = f"{tag} {chip_metric_tag(metric)}" if multi else tag
+                own_reset = format_reset_eta(metric.cycle_end or snap.cycle_end, snap.fetched_at)
                 pct_html = (
                     f'<span style="color:{color}; font-weight:700;">{pct:.0f}%</span>'
                     if pct is not None
                     else ""
                 )
-                seg_eta = (
-                    self._eta_chart_html(proj_map.get((snap.provider_id, metric.key)))
-                    if multi
-                    else ""
+                proj = proj_map.get((snap.provider_id, metric.key)) if multi else etas.get(snap.provider_id)
+                eta_html = self._eta_chart_html(proj)
+                lines.append(
+                    f'<span style="color:#8a93a6;">{label}</span> '
+                    f"{self._clock_pie_html(snap, metric, own_reset)}{pct_html}{eta_html}".rstrip()
                 )
-                segs.append(
-                    f'<span style="color:#8a93a6;">{seg_tag}</span> '
-                    f"{self._clock_pie_html(snap, metric, own_reset)}{pct_html}{seg_eta}".rstrip()
-                )
-            body = f'<span style="color:#3a4152;">/</span>'.join(segs)
-            prefix_bits = []
-            if multi:
-                prefix_bits.append(f'<span style="color:#d7dde8;">{tag}</span>')
-            if multi and shared_reset:
-                # Any shown gauge gives the same fraction — they share one cycle.
-                prefix_bits.append(self._clock_pie_html(snap, metrics[0], shared_reset).rstrip())
-            prefix = " ".join(prefix_bits) + (" " if prefix_bits else "")
-            eta_html = "" if multi else self._eta_chart_html(etas.get(snap.provider_id))
-            parts.append(prefix + body + eta_html)
-        if not parts:
+        if not lines:
             return '<span style="color:#e8ecf4;">Usage …</span>'
-        sep = '<span style="color:#7a8494;"> · </span>'
-        return sep.join(parts)
+        return "".join(f'<div style="margin-top:3px;">{line}</div>' for line in lines)
 
     def _flyout_html(self) -> str:
         proj_map = {(p.provider_id, p.metric_key): p for p in self._projections}
