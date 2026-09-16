@@ -102,3 +102,21 @@ def test_hot_spike_badge_is_visually_distinct():
     calm = mini_charts.sparkline_icon([5.0, 6.0, 7.0], QColor("#5ddea0"), hot=False)
     spiking = mini_charts.sparkline_icon([5.0, 6.0, 7.0], QColor("#5ddea0"), hot=True)
     assert calm != spiking
+
+
+def test_low_usage_dims_the_elapsed_fill():
+    """A gauge at 0-19% needs zero attention — its elapsed bar (which only
+    encodes cycle position, not usage) must not be just as bright as a
+    heavily-used gauge's, or a fine 0% reads as visually loud."""
+    mini_charts = _import_mini_charts()
+    bright = mini_charts.burn_timeline_icon(0.8, None, QColor("#8ec8ff"), usage_pct=70.0)
+    dim = mini_charts.burn_timeline_icon(0.8, None, QColor("#8ec8ff"), usage_pct=0.0)
+    assert bright != dim
+
+
+def test_no_usage_pct_keeps_the_default_bright_fill():
+    """Backward-compatible default: omitting usage_pct must not silently dim."""
+    mini_charts = _import_mini_charts()
+    default = mini_charts.burn_timeline_icon(0.8, None, QColor("#8ec8ff"))
+    bright = mini_charts.burn_timeline_icon(0.8, None, QColor("#8ec8ff"), usage_pct=70.0)
+    assert default == bright

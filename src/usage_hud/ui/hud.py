@@ -373,8 +373,13 @@ class WeatherPanel(QWidget):
         frac = reset_fraction_remaining(snap, metric, snap.fetched_at)
         color = QColor(_pct_color(metric.resolved_percent())) if frac is not None else QColor("#5a6272")
         pie = mini_charts.clock_pie_icon(frac, color)
-        label = f'<span style="color:#6f7686;">{text}</span> ' if text else ""
-        return f"{pie}{label}"
+        # Leading space on the label (not a trailing one on the icon) so a
+        # caller can always join icon+text as one unit — no missing-space
+        # glue when text is "" (Claude's 5h before its first real reset is
+        # seen: the icon still renders, right up against whatever follows).
+        if text:
+            return f'{pie} <span style="color:#6f7686;">{text}</span>'
+        return pie
 
     @staticmethod
     def _timeline_chart(
@@ -412,7 +417,13 @@ class WeatherPanel(QWidget):
                 else _ETA_COLOR["tentative"]
             )
 
-        return mini_charts.burn_timeline_icon(elapsed_frac, exhaust_frac, marker, confident=confident)
+        return mini_charts.burn_timeline_icon(
+            elapsed_frac,
+            exhaust_frac,
+            marker,
+            confident=confident,
+            usage_pct=metric.resolved_percent(),
+        )
 
     @classmethod
     def _timeline_html(
@@ -480,10 +491,17 @@ class WeatherPanel(QWidget):
                 )
                 proj = proj_map.get((snap.provider_id, metric.key)) if multi else etas.get(snap.provider_id)
                 timeline_html = self._timeline_html(snap, metric, proj)
-                lines.append(
-                    f'<span style="color:#8a93a6;">{label}</span> '
-                    f"{self._clock_pie_html(snap, metric, own_reset)}{pct_html}{timeline_html}".rstrip()
-                )
+                # Explicit space-join, not bare concatenation — pct_html can
+                # be "" (unresolvable %) and own_reset is routinely "" (no
+                # known reset time), and gluing icon/text/icon directly
+                # together with no separator crowded them into each other.
+                segs = [
+                    f'<span style="color:#8a93a6;">{label}</span>',
+                    self._clock_pie_html(snap, metric, own_reset),
+                    pct_html,
+                    timeline_html,
+                ]
+                lines.append(" ".join(s for s in segs if s))
         if not lines:
             return '<span style="color:#e8ecf4;">Usage …</span>'
         return "".join(f'<div style="margin-top:3px;">{line}</div>' for line in lines)

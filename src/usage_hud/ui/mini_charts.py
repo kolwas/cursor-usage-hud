@@ -20,6 +20,8 @@ from PySide6.QtGui import QColor, QPainter, QPen, QPixmap, QPolygonF
 
 _TRACK = QColor(255, 255, 255, 90)
 _ELAPSED = QColor(235, 238, 245, 255)
+_ELAPSED_DIM = QColor(180, 186, 198, 130)
+_LOW_USAGE_PCT = 20.0
 _UNKNOWN = QColor(255, 255, 255, 120)
 _DOT_HALO = QColor(12, 14, 20, 210)
 _HOT = QColor(255, 61, 61, 255)
@@ -105,6 +107,7 @@ def burn_timeline_icon(
     marker_color: QColor,
     *,
     confident: bool = True,
+    usage_pct: float | None = None,
     width: int = 38,
     height: int = 10,
 ) -> str:
@@ -117,6 +120,11 @@ def burn_timeline_icon(
     semi-transparent fill would blend into whatever is on the real desktop
     behind it, not into a predictable dark panel), a 3px track, a 4px dot
     with a dark halo so it stays visible over light or dark fills alike.
+
+    The elapsed fill is bright by default, but ``usage_pct`` below
+    ``_LOW_USAGE_PCT`` dims it — the bar otherwise encodes only "how far
+    into the cycle are we", which lit up just as brightly on a gauge at 0%
+    as one at 90%, loud for something that needs zero attention.
 
     ``elapsed_frac=None`` (no cycle_end to place "now" on) draws a dashed
     empty track — same size and position as every other row's timeline, just
@@ -149,7 +157,8 @@ def burn_timeline_icon(
     painter.drawRoundedRect(1, int(track_y), width - 2, bar_h, 1, 1)
 
     if elapsed_frac > 0:
-        painter.setBrush(_ELAPSED)
+        dim = usage_pct is not None and usage_pct < _LOW_USAGE_PCT
+        painter.setBrush(_ELAPSED_DIM if dim else _ELAPSED)
         painter.drawRoundedRect(1, int(track_y), max(3, round((width - 2) * elapsed_frac)), bar_h, 1, 1)
 
     if exhaust_frac is not None:
