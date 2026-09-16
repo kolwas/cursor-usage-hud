@@ -238,44 +238,46 @@ class HistoryStore:
                     )
                     continue
 
+                # Predictions are ALWAYS computed and returned now — early on
+                # they are noisier, which is exactly what `confident` is for:
+                # callers render an unconfident one as a tentative/muted
+                # estimate instead of a verdict, rather than showing nothing.
                 days_to_exhaust: float | None = None
                 renewal_offset: float | None = None
                 projected = None
                 will_exhaust = False
 
-                if confident:
-                    if remaining <= 0:
-                        days_to_exhaust = 0.0
-                    elif avg_daily > 1e-9:
-                        days_to_exhaust = remaining / avg_daily
+                if remaining <= 0:
+                    days_to_exhaust = 0.0
+                elif avg_daily > 1e-9:
+                    days_to_exhaust = remaining / avg_daily
 
-                    if days_left is not None and avg_daily > 0:
-                        if unit_is_pct:
-                            projected = level_now + avg_daily * days_left
-                            will_exhaust = projected >= 100.0 - 1e-6
-                        elif metric.limit is not None:
-                            projected = metric.used + avg_daily * days_left
-                            will_exhaust = projected >= metric.limit
+                if days_left is not None and avg_daily > 0:
+                    if unit_is_pct:
+                        projected = level_now + avg_daily * days_left
+                        will_exhaust = projected >= 100.0 - 1e-6
+                    elif metric.limit is not None:
+                        projected = metric.used + avg_daily * days_left
+                        will_exhaust = projected >= metric.limit
 
-                    if days_to_exhaust is not None and days_left is not None:
-                        renewal_offset = days_to_exhaust - days_left
+                if days_to_exhaust is not None and days_left is not None:
+                    renewal_offset = days_to_exhaust - days_left
 
                 hot = avg_daily > 0 and used_today >= burn_multiplier * max(avg_daily, 1e-9)
                 rate_label = f"~{avg_daily:.2f}%/day" if unit_is_pct else f"~{avg_daily:.1f}/day"
+                confidence_note = "" if confident else " (early estimate)"
 
                 note = ""
                 if hot:
                     note = "today burning hot"
                 elif will_exhaust and renewal_offset is not None:
-                    note = f"exhaust {_fmt_offset(renewal_offset)} vs renewal"
+                    note = f"exhaust {_fmt_offset(renewal_offset)} vs renewal{confidence_note}"
                 elif will_exhaust:
-                    note = "on track to exhaust before reset"
+                    note = f"on track to exhaust before reset{confidence_note}"
                 elif renewal_offset is not None and avg_daily > 0:
-                    note = f"ETA {_fmt_offset(renewal_offset)} vs renewal · {rate_label}"
+                    note = f"ETA {_fmt_offset(renewal_offset)} vs renewal{confidence_note} · {rate_label}"
                     if note_source:
                         note += f" ({note_source})"
-                elif not confident and avg_daily > 0:
-                    note = f"{rate_label} · warming up"
                 elif avg_daily > 0:
                     note = rate_label
 
@@ -292,6 +294,7 @@ class HistoryStore:
                         days_to_exhaust=days_to_exhaust,
                         renewal_offset_days=renewal_offset,
                         days_elapsed=elapsed_since_start,
+                        confident=confident,
                     )
                 )
         return out

@@ -1,10 +1,11 @@
 from datetime import datetime, timedelta, timezone
 
-from usage_hud.models import Alert, AlertLevel, Metric, ProviderSnapshot, utc_now
+from usage_hud.models import Alert, AlertLevel, BurnProjection, Metric, ProviderSnapshot, utc_now
 from usage_hud.ui.formatters import (
     chip_metric_tag,
     chip_metrics,
     eta_severity,
+    format_chip_eta,
     format_reset_eta,
     grouped_reset_etas,
     icon_severity,
@@ -213,3 +214,38 @@ def test_reset_fraction_remaining_is_clamped_to_0_1():
     )
     frac = reset_fraction_remaining(snap, metric, NOW)
     assert frac is None or 0.0 <= frac <= 1.0
+
+
+def _proj(**overrides) -> BurnProjection:
+    base = dict(
+        provider_id="anthropic",
+        metric_key="seven_day",
+        used_today=0.0,
+        avg_daily=5.0,
+        projected_cycle_end=None,
+        days_left=6.0,
+        will_exhaust=False,
+        renewal_offset_days=-2.0,
+        confident=True,
+    )
+    base.update(overrides)
+    return BurnProjection(**base)
+
+
+def test_confident_prediction_keeps_its_real_severity():
+    label, sev = format_chip_eta(_proj(confident=True))
+    assert label == "-2d"
+    assert sev == "bad"
+
+
+def test_unconfident_prediction_is_still_shown_but_marked_tentative():
+    """A prediction is never withheld for being early — it is shown with a
+    '?' and a neutral severity instead of the real (possibly alarming) one."""
+    label, sev = format_chip_eta(_proj(confident=False))
+    assert label == "-2d?"
+    assert sev == "tentative"
+
+
+def test_no_renewal_offset_still_means_no_badge():
+    assert format_chip_eta(_proj(renewal_offset_days=None)) is None
+    assert format_chip_eta(None) is None

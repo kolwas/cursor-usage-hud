@@ -96,3 +96,7 @@ class BurnProjection:
     # Days since this window/cycle opened — with days_left, gives the mini
     # timeline chart its "now" position on the cycle_start..cycle_end axis.
     days_elapsed: float | None = None
+    # False = too little of the window has elapsed to trust avg_daily yet;
+    # the projection fields below are still populated (never hidden), just
+    # to be rendered as a tentative/muted estimate rather than a verdict.
+    confident: bool = True

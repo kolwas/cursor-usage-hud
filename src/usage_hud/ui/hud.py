@@ -32,7 +32,7 @@ from usage_hud.ui.formatters import (
     reset_fraction_remaining,
 )
 
-_ETA_COLOR = {"bad": "#ff8a80", "warn": "#ffb020", "ok": "#8ec8ff"}
+_ETA_COLOR = {"bad": "#ff8a80", "warn": "#ffb020", "ok": "#8ec8ff", "tentative": "#9aa3b2"}
 
 
 def _ui_font(point_size: int = 9, bold: bool = False) -> QFont:
@@ -384,6 +384,7 @@ class WeatherPanel(QWidget):
         elapsed_frac = None if frac_remaining is None else max(0.0, 1.0 - frac_remaining)
         exhaust_frac = None
         marker = QColor("#5a6272")
+        confident = True
 
         if (
             proj is not None
@@ -396,9 +397,17 @@ class WeatherPanel(QWidget):
             elapsed_frac = proj.days_elapsed / window
             if proj.days_to_exhaust is not None:
                 exhaust_frac = elapsed_frac + proj.days_to_exhaust / window
-            marker = QColor(_ETA_COLOR.get(eta_severity(proj.renewal_offset_days), "#8ec8ff"))
+            confident = proj.confident
+            # Tentative predictions get the neutral marker color, not a real
+            # severity — an early noisy rate must not flash red before it has
+            # earned that verdict.
+            marker = QColor(
+                _ETA_COLOR.get(eta_severity(proj.renewal_offset_days), "#8ec8ff")
+                if confident
+                else _ETA_COLOR["tentative"]
+            )
 
-        return mini_charts.burn_timeline_icon(elapsed_frac, exhaust_frac, marker)
+        return mini_charts.burn_timeline_icon(elapsed_frac, exhaust_frac, marker, confident=confident)
 
     @classmethod
     def _timeline_html(
@@ -524,12 +533,13 @@ class WeatherPanel(QWidget):
                     if proj.renewal_offset_days is not None:
                         eta = format_renewal_offset(proj.renewal_offset_days)
                         off = proj.renewal_offset_days
+                        tag = "" if proj.confident else " (early est.)"
                         if off < 0:
-                            bits.append(f"{eta} before renewal")
+                            bits.append(f"{eta} before renewal{tag}")
                         elif off > 0:
-                            bits.append(f"{eta} after renewal")
+                            bits.append(f"{eta} after renewal{tag}")
                         else:
-                            bits.append("0d (at renewal)")
+                            bits.append(f"0d (at renewal){tag}")
                     if proj.projected_cycle_end is not None:
                         bits.append(f"→{proj.projected_cycle_end:.0f}% at reset")
                 chart = self._timeline_chart(snap, metric, proj)

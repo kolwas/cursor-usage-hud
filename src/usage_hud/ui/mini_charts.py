@@ -89,6 +89,7 @@ def burn_timeline_icon(
     exhaust_frac: float | None,
     marker_color: QColor,
     *,
+    confident: bool = True,
     width: int = 30,
     height: int = 8,
 ) -> str:
@@ -98,7 +99,9 @@ def burn_timeline_icon(
 
     ``elapsed_frac=None`` (no cycle_end to place "now" on) draws a dashed
     empty track — same size and position as every other row's timeline, just
-    with nothing plotted on it yet.
+    with nothing plotted on it yet. ``confident=False`` still plots the dot
+    (predictions are never withheld) but as a hollow ring instead of a solid
+    fill, so an early/noisy estimate reads as tentative rather than final.
     """
     pix = QPixmap(width, height)
     pix.fill(QColor(0, 0, 0, 0))
@@ -125,7 +128,14 @@ def burn_timeline_icon(
 
     if exhaust_frac is not None:
         x = max(0.0, min(1.0, exhaust_frac)) * (width - 3) + 1.5
-        painter.setBrush(marker_color)
+        if confident:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(marker_color)
+        else:
+            pen = QPen(marker_color)
+            pen.setWidthF(1.1)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawEllipse(QPointF(x, height / 2), 2.4, 2.4)
 
     painter.end()

@@ -106,13 +106,18 @@ def eta_severity(renewal_offset_days: float) -> str:
 def format_chip_eta(proj: BurnProjection | None) -> tuple[str, str] | None:
     """Chip badge: signed days vs renewal at current burn (+ after / − before).
 
-    Returns (label, severity) where severity is bad|warn|ok.
+    Returns (label, severity) where severity is bad|warn|ok|tentative. Early
+    in a window the rate is noisy but still shown — marked "tentative" (a
+    trailing "?", muted color) instead of withheld, so a prediction is always
+    visible; only its certainty is communicated differently.
     """
     if proj is None or proj.renewal_offset_days is None:
         return None
     label = format_renewal_offset(proj.renewal_offset_days)
     if label is None:
         return None
+    if not proj.confident:
+        return f"{label}?", "tentative"
     return label, eta_severity(proj.renewal_offset_days)
 
 

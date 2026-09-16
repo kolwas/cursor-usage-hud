@@ -39,21 +39,19 @@ def _proj(store: HistoryStore, snap: ProviderSnapshot, key: str = "seven_day"):
     return next(p for p in projs if p.metric_key == key)
 
 
-def test_fresh_window_does_not_claim_an_overrun(tmp_path):
-    """2% used, 1h into a fresh 7-day window: must not predict exhaustion.
-
-    Reproduces the false 'projected overrun' seen with the real Claude
-    Desktop log: a tiny elapsed time makes the extrapolated rate huge, and
-    without a warm-up gate that alone used to flag will_exhaust=True.
+def test_fresh_window_is_still_predicted_but_marked_tentative(tmp_path):
+    """2% used, 1h into a fresh 7-day window: the noisy extrapolated rate
+    (the false 'projected overrun' seen with the real Claude Desktop log)
+    is still returned — predictions are never withheld — but flagged
+    unconfident so callers render it as a muted/early estimate, not a verdict.
     """
     store = HistoryStore(tmp_path / "history.json")
     snap = _seven_day_snap(elapsed_hours=1, used=2.0)
 
     proj = _proj(store, snap)
-    assert proj.will_exhaust is False
-    assert proj.renewal_offset_days is None
-    assert "warming up" in proj.note
-    # The raw rate stays visible — only the misleading verdict is suppressed.
+    assert proj.confident is False
+    assert proj.renewal_offset_days is not None
+    assert "(early estimate)" in proj.note
     assert proj.avg_daily > 0
 
 
@@ -64,8 +62,9 @@ def test_same_rate_is_trusted_once_the_window_has_run_a_while(tmp_path):
 
     proj = _proj(store, snap)
     assert proj.will_exhaust is True
+    assert proj.confident is True
     assert proj.renewal_offset_days is not None
-    assert "warming up" not in proj.note
+    assert "(early estimate)" not in proj.note
 
 
 def test_short_rolling_window_gets_a_proportionally_short_warmup(tmp_path):
@@ -94,7 +93,7 @@ def test_short_rolling_window_gets_a_proportionally_short_warmup(tmp_path):
         ],
     )
     proj = _proj(store, snap, key="five_hour")
-    assert "warming up" not in proj.note
+    assert proj.confident is True
 
 
 def test_very_fresh_short_window_still_gets_a_warmup(tmp_path):
@@ -122,8 +121,8 @@ def test_very_fresh_short_window_still_gets_a_warmup(tmp_path):
         ],
     )
     proj = _proj(store, snap, key="five_hour")
-    assert proj.will_exhaust is False
-    assert "warming up" in proj.note
+    assert proj.confident is False
+    assert "(early estimate)" in proj.note
 
 
 def test_no_cycle_length_known_is_left_unconstrained(tmp_path):

@@ -64,3 +64,12 @@ def test_burn_timeline_icon_clamps_out_of_range_fractions_without_crashing():
     # must still produce a valid image, not raise.
     tag = mini_charts.burn_timeline_icon(-0.4, 3.2, QColor("#ffb020"))
     assert "data:image/png;base64," in tag
+
+
+def test_unconfident_exhaustion_dot_is_drawn_differently_from_a_confident_one():
+    """A tentative prediction is still plotted — never withheld — but its dot
+    must not look identical to a confident one, or it would read as a verdict."""
+    mini_charts = _import_mini_charts()
+    confident = mini_charts.burn_timeline_icon(0.3, 0.6, QColor("#ff8a80"), confident=True)
+    tentative = mini_charts.burn_timeline_icon(0.3, 0.6, QColor("#ff8a80"), confident=False)
+    assert confident != tentative
