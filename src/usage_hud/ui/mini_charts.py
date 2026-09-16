@@ -18,9 +18,10 @@ import base64
 from PySide6.QtCore import QBuffer, QIODevice, QPointF, Qt
 from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 
-_TRACK = QColor(255, 255, 255, 36)
-_ELAPSED = QColor(255, 255, 255, 100)
-_UNKNOWN = QColor(255, 255, 255, 60)
+_TRACK = QColor(255, 255, 255, 60)
+_ELAPSED = QColor(255, 255, 255, 165)
+_UNKNOWN = QColor(255, 255, 255, 90)
+_DOT_HALO = QColor(12, 14, 20, 210)
 
 
 def _data_uri(pix: QPixmap) -> str:
@@ -90,12 +91,15 @@ def burn_timeline_icon(
     marker_color: QColor,
     *,
     confident: bool = True,
-    width: int = 30,
-    height: int = 8,
+    width: int = 38,
+    height: int = 10,
 ) -> str:
     """A tiny horizontal timeline: cycle_start..cycle_end as the full bar,
     filled up to "now", with a dot marking the projected exhaustion date —
     the prediction as a picture instead of a signed day count.
+
+    Sized and contrasted to still read at chip scale: a 3px track, a 4px dot
+    with a dark halo so it stays visible over light or dark fills alike.
 
     ``elapsed_frac=None`` (no cycle_end to place "now" on) draws a dashed
     empty track — same size and position as every other row's timeline, just
@@ -103,16 +107,17 @@ def burn_timeline_icon(
     (predictions are never withheld) but as a hollow ring instead of a solid
     fill, so an early/noisy estimate reads as tentative rather than final.
     """
+    bar_h = 3
     pix = QPixmap(width, height)
     pix.fill(QColor(0, 0, 0, 0))
     painter = QPainter(pix)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    track_y = height / 2 - 1
+    track_y = (height - bar_h) / 2
 
     if elapsed_frac is None:
         painter.setPen(_unknown_pen())
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(0, int(track_y), width - 1, 2, 1, 1)
+        painter.drawRoundedRect(0, int(track_y), width - 1, bar_h, 1, 1)
         painter.end()
         return _img_tag(_data_uri(pix), width, height)
 
@@ -120,23 +125,27 @@ def burn_timeline_icon(
     elapsed_frac = max(0.0, min(1.0, elapsed_frac))
 
     painter.setBrush(_TRACK)
-    painter.drawRoundedRect(0, int(track_y), width, 2, 1, 1)
+    painter.drawRoundedRect(0, int(track_y), width, bar_h, 1, 1)
 
     if elapsed_frac > 0:
         painter.setBrush(_ELAPSED)
-        painter.drawRoundedRect(0, int(track_y), max(2, round(width * elapsed_frac)), 2, 1, 1)
+        painter.drawRoundedRect(0, int(track_y), max(3, round(width * elapsed_frac)), bar_h, 1, 1)
 
     if exhaust_frac is not None:
-        x = max(0.0, min(1.0, exhaust_frac)) * (width - 3) + 1.5
+        x = max(0.0, min(1.0, exhaust_frac)) * (width - 4) + 2.0
+        center = QPointF(x, height / 2)
+        # Dark halo first so the dot reads on any background, then the dot.
+        painter.setBrush(_DOT_HALO)
+        painter.drawEllipse(center, 4.0, 4.0)
         if confident:
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(marker_color)
         else:
             pen = QPen(marker_color)
-            pen.setWidthF(1.1)
+            pen.setWidthF(1.3)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawEllipse(QPointF(x, height / 2), 2.4, 2.4)
+        painter.drawEllipse(center, 3.0, 3.0)
 
     painter.end()
     return _img_tag(_data_uri(pix), width, height)

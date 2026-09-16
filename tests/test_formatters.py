@@ -6,6 +6,7 @@ from usage_hud.ui.formatters import (
     chip_metrics,
     eta_severity,
     format_chip_eta,
+    format_days_duration,
     format_reset_eta,
     grouped_reset_etas,
     icon_severity,
@@ -249,3 +250,26 @@ def test_unconfident_prediction_is_still_shown_but_marked_tentative():
 def test_no_renewal_offset_still_means_no_badge():
     assert format_chip_eta(_proj(renewal_offset_days=None)) is None
     assert format_chip_eta(None) is None
+
+
+def test_unknown_reset_time_still_shows_a_raw_exhaustion_horizon():
+    """Claude's 5h before its first real reset is seen: no cycle_end, so no
+    renewal_offset_days — but a burn rate exists, so an unsigned '→Nd' is
+    shown instead of nothing, always as a tentative estimate."""
+    label, sev = format_chip_eta(
+        _proj(renewal_offset_days=None, days_to_exhaust=2.5, avg_daily=6.9)
+    )
+    assert label == "→2d"
+    assert sev == "tentative"
+
+
+def test_no_burn_rate_at_all_still_means_no_badge():
+    assert format_chip_eta(_proj(renewal_offset_days=None, days_to_exhaust=None)) is None
+    assert format_chip_eta(_proj(renewal_offset_days=None, days_to_exhaust=2.0, avg_daily=0.0)) is None
+
+
+def test_format_days_duration_matches_reset_eta_granularity():
+    assert format_days_duration(0) == "0h"
+    assert format_days_duration(None) == "0h"
+    assert format_days_duration(0.5) == "12h00m"
+    assert format_days_duration(3.2) == "3d"

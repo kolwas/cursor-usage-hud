@@ -93,6 +93,18 @@ def grouped_reset_etas(
     return "", per_metric
 
 
+def format_days_duration(days: float | None) -> str:
+    """Unsigned "6h"/"3d" duration — same h/d granularity as format_reset_eta,
+    for a raw "exhausts in…" horizon that has no renewal date to compare to."""
+    if days is None or days <= 0:
+        return "0h"
+    seconds = days * 86400.0
+    if seconds >= 86400:
+        return f"{int(seconds // 86400)}d"
+    hours, minutes = divmod(int(seconds // 60), 60)
+    return f"{hours}h{minutes:02d}m" if hours else f"{minutes}m"
+
+
 def eta_severity(renewal_offset_days: float) -> str:
     """bad|warn|ok for a signed days-vs-renewal offset — shared by the text
     badge and the timeline chart's exhaustion-marker color, so both agree."""
@@ -110,15 +122,24 @@ def format_chip_eta(proj: BurnProjection | None) -> tuple[str, str] | None:
     in a window the rate is noisy but still shown — marked "tentative" (a
     trailing "?", muted color) instead of withheld, so a prediction is always
     visible; only its certainty is communicated differently.
+
+    A gauge whose window-end is unknown entirely (e.g. Claude's 5h before its
+    first real reset is seen) has no renewal date to offset against — but if
+    a burn rate exists, an unsigned "→6h" exhaustion horizon is shown instead
+    of nothing, always tentative since it can't be checked against a reset.
     """
-    if proj is None or proj.renewal_offset_days is None:
+    if proj is None:
         return None
-    label = format_renewal_offset(proj.renewal_offset_days)
-    if label is None:
-        return None
-    if not proj.confident:
-        return f"{label}?", "tentative"
-    return label, eta_severity(proj.renewal_offset_days)
+    if proj.renewal_offset_days is not None:
+        label = format_renewal_offset(proj.renewal_offset_days)
+        if label is None:
+            return None
+        if not proj.confident:
+            return f"{label}?", "tentative"
+        return label, eta_severity(proj.renewal_offset_days)
+    if proj.days_to_exhaust is not None and proj.avg_daily > 0:
+        return f"→{format_days_duration(proj.days_to_exhaust)}", "tentative"
+    return None
 
 
 def reset_fraction_remaining(
