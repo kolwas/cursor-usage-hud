@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Usage HUD
+Comment=Always-visible usage chip for Cursor, Copilot and OpenCode (Plasma tray + idle monitor)
+Exec=usage-hud
+Icon=utilities-system-monitor
+Terminal=false
+Categories=Utility;Monitor;Qt;
+StartupNotify=false
+X-GNOME-Autostart-enabled=true
+X-KDE-autostart-after=panel
+X-KDE-StartupNotify=false

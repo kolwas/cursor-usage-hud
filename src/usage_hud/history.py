@@ -1,4 +1,4 @@
-"""Local snapshot history for burn-rate projections."""
+"""Local snapshot history for burn-rate projections (all providers)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,84 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from usage_hud.models import BurnProjection, ProviderSnapshot
+from usage_hud.cycle import infer_cycle_start
+from usage_hud.models import BurnProjection, Metric, ProviderSnapshot
+
+# Ignore noisy first/last-sample rates shorter than this.
+_MIN_ELAPSED_DAYS = 0.25  # 6 hours
+_SKIP_KEYS = frozenset({"ondemand"})
+
+# A window near its own reset gives an unstable rate: 2% used in the first
+# hour of a 7-day window extrapolates to "14%/day", which looks like an
+# overrun even though it is just noise from a tiny denominator. Require a
+# slice of the window's OWN length to have elapsed — scaled to the window,
+# so a 5h window and a 30-day one each get a sane, proportional warm-up —
+# before trusting the rate enough to project an exhaustion date from it.
+_WARMUP_FRACTION = 0.10
+_WARMUP_FLOOR_DAYS = 1.0 / 24.0  # 1 hour
+
+
+def _fmt_offset(days: float) -> str:
+    """Signed day offset vs renewal: −1d = one day before reset."""
+    rounded = int(round(days))
+    if rounded == 0:
+        return "0d"
+    if rounded > 99:
+        return "+99d+"
+    if rounded < -99:
+        return "-99d+"
+    return f"{rounded:+d}d"
+
+
+def _parse_ts(value: str) -> datetime:
+    return datetime.fromisoformat(value)
+
+
+def _cycle_end_key(value: datetime | str | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc).isoformat()
+    try:
+        return _parse_ts(str(value)).astimezone(timezone.utc).isoformat()
+    except ValueError:
+        return str(value)
+
+
+def _metric_level(sample: dict[str, Any], key: str) -> float | None:
+    """Prefer percent_used (plan %) over raw used (pool counters)."""
+    for m in sample.get("metrics") or []:
+        if m.get("key") != key:
+            continue
+        if m.get("percent_used") is not None:
+            return float(m["percent_used"])
+        if m.get("used") is not None:
+            return float(m["used"])
+    return None
+
+
+def _metric_window(
+    snap: ProviderSnapshot,
+    metric: Metric,
+    now: datetime,
+) -> tuple[datetime | None, datetime | None, float | None]:
+    """Resolve cycle_start/end/days_left for one gauge (metric overrides snap)."""
+    cycle_end = metric.cycle_end or snap.cycle_end
+    cycle_start = metric.cycle_start or snap.cycle_start
+    pct = metric.resolved_percent()
+    cycle_start = infer_cycle_start(
+        cycle_end=cycle_end,
+        cycle_start=cycle_start,
+        percent_used=pct,
+        now=now,
+    )
+    days_left = None
+    if cycle_end is not None:
+        days_left = max(
+            0.0,
+            (cycle_end.astimezone(timezone.utc) - now).total_seconds() / 86400.0,
+        )
+    return cycle_start, cycle_end, days_left
 
 
 class HistoryStore:
@@ -35,6 +112,7 @@ class HistoryStore:
             entry = {
                 "ts": snap.fetched_at.astimezone(timezone.utc).isoformat(),
                 "provider_id": snap.provider_id,
+                "cycle_start": snap.cycle_start.isoformat() if snap.cycle_start else None,
                 "cycle_end": snap.cycle_end.isoformat() if snap.cycle_end else None,
                 "metrics": [
                     {
@@ -43,12 +121,12 @@ class HistoryStore:
                         "limit": m.limit,
                         "percent_used": m.resolved_percent(),
                         "unit": m.unit,
+                        "cycle_end": m.cycle_end.isoformat() if m.cycle_end else None,
                     }
                     for m in snap.metrics
                 ],
             }
             samples.append(entry)
-        # Keep ~14 days at 2-min cadence ≈ 10k; trim to last 4000 samples.
         if len(samples) > 4000:
             data["samples"] = samples[-4000:]
         self._write(data)
@@ -67,20 +145,90 @@ class HistoryStore:
             if not snap.ok or not snap.metrics:
                 continue
             for metric in snap.metrics:
-                if metric.limit is None:
+                if metric.key in _SKIP_KEYS:
                     continue
+                if metric.limit is None and metric.resolved_percent() is None:
+                    continue
+
+                pct = metric.resolved_percent()
+                if pct is not None:
+                    level_now = pct
+                    remaining = max(0.0, 100.0 - pct)
+                    unit_is_pct = True
+                else:
+                    level_now = metric.used
+                    rem = metric.resolved_remaining()
+                    remaining = rem if rem is not None else 0.0
+                    unit_is_pct = False
+
+                cycle_start, cycle_end, days_left = _metric_window(snap, metric, now)
+
+                elapsed_since_start: float | None = None
+                if cycle_start is not None:
+                    elapsed_since_start = max(
+                        (now - cycle_start.astimezone(timezone.utc)).total_seconds()
+                        / 86400.0,
+                        0.0,
+                    )
+
+                avg_daily = 0.0
+                note_source = ""
+                if elapsed_since_start is not None and level_now > 0:
+                    days_in = max(elapsed_since_start, _WARMUP_FLOOR_DAYS)
+                    avg_daily = level_now / days_in
+                    note_source = "cycle pace"
+
+                # Confident enough to forecast an exhaustion date only once a
+                # meaningful slice of THIS window has actually been observed.
+                confident = True
+                if elapsed_since_start is not None and days_left is not None:
+                    window_days = elapsed_since_start + days_left
+                    warmup = max(_WARMUP_FLOOR_DAYS, window_days * _WARMUP_FRACTION)
+                    confident = elapsed_since_start >= warmup
+
+                cycle_key = _cycle_end_key(cycle_end or snap.cycle_end)
                 series = [
                     s
                     for s in samples
                     if s.get("provider_id") == snap.provider_id
-                    and any(m.get("key") == metric.key for m in s.get("metrics") or [])
+                    and _metric_level(s, metric.key) is not None
                 ]
-                if len(series) < 2:
+                if cycle_key is not None:
+                    same_cycle = [
+                        s
+                        for s in series
+                        if _cycle_end_key(s.get("cycle_end")) == cycle_key
+                    ]
+                    if len(same_cycle) >= 2:
+                        series = same_cycle
+
+                used_today = 0.0
+                if len(series) >= 2:
+                    first, last = series[0], series[-1]
+                    t0, t1 = _parse_ts(first["ts"]), _parse_ts(last["ts"])
+                    elapsed_days = max((t1 - t0).total_seconds() / 86400.0, 1e-6)
+                    v0 = _metric_level(first, metric.key) or 0.0
+                    v1 = _metric_level(last, metric.key) or 0.0
+                    delta = max(0.0, v1 - v0)
+                    if elapsed_days >= _MIN_ELAPSED_DAYS:
+                        hist_avg = delta / elapsed_days
+                        if hist_avg > avg_daily:
+                            avg_daily = hist_avg
+                            note_source = "history"
+
+                    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                    today_samples = [s for s in series if _parse_ts(s["ts"]) >= day_start]
+                    if today_samples:
+                        a = _metric_level(today_samples[0], metric.key) or 0.0
+                        b = _metric_level(today_samples[-1], metric.key) or 0.0
+                        used_today = max(0.0, b - a)
+
+                if avg_daily <= 0 and days_left is None:
                     out.append(
                         BurnProjection(
                             provider_id=snap.provider_id,
                             metric_key=metric.key,
-                            used_today=0.0,
+                            used_today=used_today,
                             avg_daily=0.0,
                             projected_cycle_end=None,
                             days_left=None,
@@ -90,52 +238,46 @@ class HistoryStore:
                     )
                     continue
 
-                def used_at(sample: dict[str, Any]) -> float:
-                    for m in sample.get("metrics") or []:
-                        if m.get("key") == metric.key:
-                            return float(m.get("used") or 0)
-                    return 0.0
-
-                def ts(sample: dict[str, Any]) -> datetime:
-                    return datetime.fromisoformat(sample["ts"])
-
-                first = series[0]
-                last = series[-1]
-                t0, t1 = ts(first), ts(last)
-                elapsed_days = max((t1 - t0).total_seconds() / 86400.0, 1e-6)
-                delta = max(0.0, used_at(last) - used_at(first))
-                avg_daily = delta / elapsed_days
-
-                # Today: from midnight UTC or first sample today.
-                day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-                today_samples = [s for s in series if ts(s) >= day_start]
-                if today_samples:
-                    used_today = max(0.0, used_at(today_samples[-1]) - used_at(today_samples[0]))
-                else:
-                    used_today = 0.0
-
-                days_left = None
+                days_to_exhaust: float | None = None
+                renewal_offset: float | None = None
                 projected = None
                 will_exhaust = False
-                if snap.cycle_end:
-                    days_left = max(
-                        0.0,
-                        (snap.cycle_end.astimezone(timezone.utc) - now).total_seconds()
-                        / 86400.0,
-                    )
-                    projected = metric.used + avg_daily * days_left
-                    if metric.limit is not None and projected >= metric.limit:
-                        will_exhaust = True
+
+                if confident:
+                    if remaining <= 0:
+                        days_to_exhaust = 0.0
+                    elif avg_daily > 1e-9:
+                        days_to_exhaust = remaining / avg_daily
+
+                    if days_left is not None and avg_daily > 0:
+                        if unit_is_pct:
+                            projected = level_now + avg_daily * days_left
+                            will_exhaust = projected >= 100.0 - 1e-6
+                        elif metric.limit is not None:
+                            projected = metric.used + avg_daily * days_left
+                            will_exhaust = projected >= metric.limit
+
+                    if days_to_exhaust is not None and days_left is not None:
+                        renewal_offset = days_to_exhaust - days_left
 
                 hot = avg_daily > 0 and used_today >= burn_multiplier * max(avg_daily, 1e-9)
+                rate_label = f"~{avg_daily:.2f}%/day" if unit_is_pct else f"~{avg_daily:.1f}/day"
 
                 note = ""
                 if hot:
                     note = "today burning hot"
+                elif will_exhaust and renewal_offset is not None:
+                    note = f"exhaust {_fmt_offset(renewal_offset)} vs renewal"
                 elif will_exhaust:
                     note = "on track to exhaust before reset"
+                elif renewal_offset is not None and avg_daily > 0:
+                    note = f"ETA {_fmt_offset(renewal_offset)} vs renewal · {rate_label}"
+                    if note_source:
+                        note += f" ({note_source})"
+                elif not confident and avg_daily > 0:
+                    note = f"{rate_label} · warming up"
                 elif avg_daily > 0:
-                    note = f"~{avg_daily:.1f}/day"
+                    note = rate_label
 
                 out.append(
                     BurnProjection(
@@ -147,6 +289,8 @@ class HistoryStore:
                         days_left=days_left,
                         will_exhaust=will_exhaust,
                         note=note,
+                        days_to_exhaust=days_to_exhaust,
+                        renewal_offset_days=renewal_offset,
                     )
                 )
         return out

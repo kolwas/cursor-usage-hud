@@ -26,15 +26,30 @@ def _default_state_db() -> Path:
     appdata = os.environ.get("APPDATA")
     if appdata:
         return Path(appdata) / "Cursor" / "User" / "globalStorage" / "state.vscdb"
-    return (
+    # Linux (KDE/GNOME) + Cursor flatpak/native layouts
+    candidates = [
+        Path.home() / ".config" / "Cursor" / "User" / "globalStorage" / "state.vscdb",
+        Path.home()
+        / ".var"
+        / "app"
+        / "com.cursor.Cursor"
+        / "config"
+        / "Cursor"
+        / "User"
+        / "globalStorage"
+        / "state.vscdb",
         Path.home()
         / "Library"
         / "Application Support"
         / "Cursor"
         / "User"
         / "globalStorage"
-        / "state.vscdb"
-    )
+        / "state.vscdb",
+    ]
+    for path in candidates:
+        if path.is_file():
+            return path
+    return candidates[0]
 
 
 def _jwt_payload(token: str) -> dict[str, Any]:
@@ -130,27 +145,51 @@ class CursorProvider(Provider):
         breakdown = plan.get("breakdown") or {}
 
         detail_bits = []
+        if plan_used or plan_limit is not None:
+            detail_bits.append(
+                f"pool {plan_used:g}"
+                + (f"/{float(plan_limit):g}" if plan_limit is not None else "")
+            )
         if breakdown:
             detail_bits.append(
                 f"included {breakdown.get('included', '?')} + bonus {breakdown.get('bonus', '?')}"
             )
-        if auto_pct is not None:
-            detail_bits.append(f"auto {auto_pct}%")
-        if api_pct is not None:
-            detail_bits.append(f"API {api_pct}%")
 
-        metrics.append(
-            Metric(
-                key="included",
-                label="Included plan",
-                used=plan_used,
-                limit=float(plan_limit) if plan_limit is not None else None,
-                unit="",
-                remaining=float(plan_remaining) if plan_remaining is not None else None,
-                percent_used=float(total_pct) if total_pct is not None else None,
-                detail=" · ".join(detail_bits),
+        def _pct_metric(key: str, label: str, pct: float | None, detail: str = "") -> None:
+            if pct is None:
+                return
+            value = float(pct)
+            metrics.append(
+                Metric(
+                    key=key,
+                    label=label,
+                    used=value,
+                    limit=100.0,
+                    unit="%",
+                    remaining=max(0.0, 100.0 - value),
+                    percent_used=value,
+                    detail=detail,
+                )
             )
-        )
+
+        # totalPercentUsed is the headline; API/Auto are separate burn gauges.
+        _pct_metric("included", "Included plan", total_pct, " · ".join(detail_bits))
+        _pct_metric("api", "API models", api_pct)
+        _pct_metric("auto", "Auto models", auto_pct)
+
+        if total_pct is None and not metrics:
+            metrics.append(
+                Metric(
+                    key="included",
+                    label="Included plan",
+                    used=plan_used,
+                    limit=float(plan_limit) if plan_limit is not None else None,
+                    unit="",
+                    remaining=float(plan_remaining) if plan_remaining is not None else None,
+                    percent_used=None,
+                    detail=" · ".join(detail_bits),
+                )
+            )
 
         if on_demand.get("enabled"):
             od_used = _cents_to_dollars(on_demand.get("used"))

@@ -1,0 +1,253 @@
+"""Pure helpers for tray titles / severity (Windows + Linux)."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
+
+from usage_hud.models import Alert, AlertLevel, BurnProjection, Metric, ProviderSnapshot
+
+# Providers whose compact chip shows more than one gauge at once — short-term
+# and long-term (or Included vs. API) side by side, so both are visible
+# without expanding.
+CHIP_METRIC_KEYS: dict[str, tuple[str, ...]] = {
+    "anthropic": ("five_hour", "seven_day"),
+    "cursor": ("included", "api"),
+}
+
+# Compact tag for a metric when several share one chip segment — the full
+# Metric.label (e.g. "Included plan") stays as-is everywhere else (flyout,
+# tray tooltip); only the small always-visible chip needs it this short.
+_CHIP_METRIC_TAG: dict[str, str] = {
+    "included": "Incl",
+    "api": "API",
+    "auto": "Auto",
+    "five_hour": "5h",
+    "seven_day": "7d",
+    "seven_day_opus": "7d Opus",
+}
+
+
+def chip_metrics(snap: ProviderSnapshot) -> list[Metric]:
+    """Gauges to show in the small chip — several for CHIP_METRIC_KEYS providers,
+    else just the first metric with a resolvable percent."""
+    keys = CHIP_METRIC_KEYS.get(snap.provider_id)
+    if keys:
+        by_key = {m.key: m for m in snap.metrics}
+        chosen = [by_key[k] for k in keys if k in by_key]
+        if chosen:
+            return chosen
+    for metric in snap.metrics:
+        if metric.resolved_percent() is not None:
+            return [metric]
+    return []
+
+
+def chip_metric_tag(metric: Metric) -> str:
+    return _CHIP_METRIC_TAG.get(metric.key, metric.label)
+
+
+def format_renewal_offset(days: float | None) -> str | None:
+    """−1d = exhaust one day before renewal; +2d = trend lasts past reset."""
+    if days is None:
+        return None
+    rounded = int(round(days))
+    if rounded == 0:
+        return "0d"
+    # Near-zero burn yields huge +offsets — keep the chip readable.
+    if rounded > 99:
+        return "+99d+"
+    if rounded < -99:
+        return "-99d+"
+    return f"{rounded:+d}d"
+
+
+def format_reset_eta(cycle_end: datetime | None, now: datetime | None = None) -> str:
+    """Time until a quota window rolls — "2h10m" for rolling windows, "3d" above a day."""
+    if cycle_end is None:
+        return ""
+    now = now or datetime.now(timezone.utc)
+    if cycle_end.tzinfo is None:
+        cycle_end = cycle_end.replace(tzinfo=timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    seconds = (cycle_end - now).total_seconds()
+    if seconds <= 0:
+        return "now"
+    if seconds >= 86400:
+        # Countdown, so floor: "3d" means at least three full days left.
+        return f"{int(seconds // 86400)}d"
+    hours, minutes = divmod(int(seconds // 60), 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+    return f"{minutes}m"
+
+
+def grouped_reset_etas(
+    snap: ProviderSnapshot, metrics: list[Metric], now: datetime | None = None
+) -> tuple[str, dict[str, str]]:
+    """(shared, per_metric) countdowns for a set of gauges on one provider.
+
+    Gauges on the same billing cycle (e.g. Cursor's Included/API/Auto) all
+    reset at once — showing "resets in 25d" next to each one just repeats
+    itself. Rolling windows (Claude's 5h/7d) genuinely differ. So: one shared
+    countdown when every shown gauge agrees, otherwise one per metric.
+    """
+    now = now or snap.fetched_at
+    per_metric = {m.key: format_reset_eta(m.cycle_end or snap.cycle_end, now) for m in metrics}
+    values = list(per_metric.values())
+    if values and values[0] and all(v == values[0] for v in values):
+        return values[0], {}
+    return "", per_metric
+
+
+def format_chip_eta(proj: BurnProjection | None) -> tuple[str, str] | None:
+    """Chip badge: signed days vs renewal at current burn (+ after / − before).
+
+    Returns (label, severity) where severity is bad|warn|ok.
+    """
+    if proj is None or proj.renewal_offset_days is None:
+        return None
+    label = format_renewal_offset(proj.renewal_offset_days)
+    if label is None:
+        return None
+    off = proj.renewal_offset_days
+    if off < -1:
+        sev = "bad"
+    elif off < 0:
+        sev = "warn"
+    elif off <= 3:
+        sev = "warn"
+    else:
+        sev = "ok"
+    return label, sev
+
+
+def primary_eta_projection(
+    snapshots: list[ProviderSnapshot],
+    projections: list[BurnProjection],
+) -> dict[str, BurnProjection]:
+    """Headline +/−d for every provider — first usable gauge (skip on-demand).
+
+    Soft preference only when several gauges exist (Cursor included, Copilot premium).
+    New providers automatically get ETA from their first metric with an offset.
+    """
+    by_key = {(p.provider_id, p.metric_key): p for p in projections}
+    soft_prefer = {
+        "cursor": ("included",),
+        "copilot": ("premium", "chat", "completions"),
+        "opencode-go": ("monthly", "weekly", "rolling"),
+        "openai": ("primary_window", "secondary_window"),
+        "anthropic": ("seven_day", "five_hour", "seven_day_opus"),
+    }
+    out: dict[str, BurnProjection] = {}
+    for snap in snapshots:
+        if not snap.ok:
+            continue
+        order = list(soft_prefer.get(snap.provider_id, ()))
+        for metric in snap.metrics:
+            if metric.key not in order:
+                order.append(metric.key)
+        chosen: BurnProjection | None = None
+        for key in order:
+            if key == "ondemand":
+                continue
+            proj = by_key.get((snap.provider_id, key))
+            if proj and proj.renewal_offset_days is not None and proj.avg_daily > 0:
+                chosen = proj
+                break
+        if chosen is not None:
+            out[snap.provider_id] = chosen
+    return out
+
+
+def primary_renewal_offset(
+    snapshots: list[ProviderSnapshot],
+    projections: list[BurnProjection],
+) -> dict[str, float]:
+    """provider_id → renewal_offset_days for chip."""
+    return {
+        pid: proj.renewal_offset_days
+        for pid, proj in primary_eta_projection(snapshots, projections).items()
+        if proj.renewal_offset_days is not None
+    }
+
+
+
+def worst_percent(snapshots: list[ProviderSnapshot]) -> float | None:
+    pcts: list[float] = []
+    for snap in snapshots:
+        if not snap.ok:
+            continue
+        for metric in snap.metrics:
+            pct = metric.resolved_percent()
+            if pct is not None:
+                pcts.append(pct)
+    return max(pcts) if pcts else None
+
+
+def compact_title(snapshots: list[ProviderSnapshot], alerts: list[Alert]) -> str:
+    bits: list[str] = []
+    for snap in snapshots:
+        tag = {
+            "cursor": "Cur",
+            "copilot": "Cop",
+            "opencode-go": "Go",
+            "openai": "OAI",
+            "anthropic": "Cla",
+            "github": "GH",
+            "cloud": "Cld",
+        }.get(snap.provider_id, snap.provider_id[:3].title())
+        if not snap.ok:
+            bits.append(f"{tag}:!")
+            continue
+        pct = snap.primary_percent()
+        bits.append(f"{tag}:{pct:.0f}%" if pct is not None else tag)
+    text = " · ".join(bits) if bits else "Usage HUD"
+    if alerts and alerts[0].level in {AlertLevel.WARN, AlertLevel.CRITICAL}:
+        text = f"! {text}"
+    return text
+
+
+def icon_severity(snapshots: list[ProviderSnapshot], alerts: list[Alert]) -> tuple[QColor, bool]:
+    """(color, urgent) from real alerts only — not a raw max() over every gauge.
+
+    A blanket "highest % anywhere" badge used to put e.g. Cursor's API-models
+    70% on the icon even though nothing had actually crossed an alert
+    threshold — alerts.py already applies the right threshold per metric type
+    (95%/85%/70% for on-demand…), so the icon should follow its verdict, not
+    recompute a cruder one of its own.
+    """
+    if any(a.level == AlertLevel.CRITICAL for a in alerts):
+        return QColor("#ff5c5c"), True
+    if any(a.level == AlertLevel.WARN for a in alerts):
+        return QColor("#ffb020"), True
+    if any(not s.ok for s in snapshots):
+        return QColor("#ffb020"), True
+    return QColor("#3dd68c"), False
+
+
+def badge_icon(snapshots: list[ProviderSnapshot], alerts: list[Alert]) -> QIcon:
+    """Plain colored icon: green/orange/red for status, a small "!" only when
+    something has actually crossed an alert threshold — no raw percent number."""
+    color, urgent = icon_severity(snapshots, alerts)
+
+    pix = QPixmap(64, 64)
+    pix.fill(QColor(0, 0, 0, 0))
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setBrush(color)
+    painter.setPen(QColor(16, 20, 28))
+    painter.drawRoundedRect(2, 2, 60, 60, 14, 14)
+    if urgent:
+        painter.setPen(QColor("#101418"))
+        font = QFont()
+        font.setStyleHint(QFont.StyleHint.SansSerif)
+        font.setBold(True)
+        font.setPointSize(28)
+        painter.setFont(font)
+        painter.drawText(pix.rect(), int(Qt.AlignmentFlag.AlignCenter), "!")
+    painter.end()
+    return QIcon(pix)

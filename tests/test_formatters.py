@@ -1,0 +1,162 @@
+from datetime import datetime, timedelta, timezone
+
+from usage_hud.models import Alert, AlertLevel, Metric, ProviderSnapshot, utc_now
+from usage_hud.ui.formatters import (
+    chip_metric_tag,
+    chip_metrics,
+    format_reset_eta,
+    grouped_reset_etas,
+    icon_severity,
+)
+
+NOW = datetime(2026, 9, 15, 12, tzinfo=timezone.utc)
+
+
+def test_rolling_window_shows_hours_and_minutes():
+    assert format_reset_eta(NOW + timedelta(hours=2, minutes=10), NOW) == "2h10m"
+
+
+def test_short_window_shows_minutes():
+    assert format_reset_eta(NOW + timedelta(minutes=8), NOW) == "8m"
+
+
+def test_long_window_shows_days():
+    assert format_reset_eta(NOW + timedelta(days=3, hours=2), NOW) == "3d"
+
+
+def test_days_are_floored_not_rounded_up():
+    """A countdown must not claim 4d when 3 d 20 h remain."""
+    assert format_reset_eta(NOW + timedelta(days=3, hours=20), NOW) == "3d"
+    assert format_reset_eta(NOW + timedelta(hours=23, minutes=59), NOW) == "23h59m"
+
+
+def test_unknown_or_past_window():
+    assert format_reset_eta(None, NOW) == ""
+    assert format_reset_eta(NOW - timedelta(minutes=1), NOW) == "now"
+
+
+def _snap(provider_id: str, *metrics: Metric) -> ProviderSnapshot:
+    return ProviderSnapshot(
+        provider_id=provider_id, title=provider_id, ok=True, fetched_at=utc_now(), metrics=list(metrics)
+    )
+
+
+def test_claude_chip_shows_both_short_and_long_term():
+    """The small chip must carry 5h and 7d together, not just one of them."""
+    snap = _snap(
+        "anthropic",
+        Metric(key="five_hour", label="5h", used=8, limit=100, unit="%", percent_used=8),
+        Metric(key="seven_day", label="7d", used=2, limit=100, unit="%", percent_used=2),
+    )
+    metrics = chip_metrics(snap)
+    assert [m.key for m in metrics] == ["five_hour", "seven_day"]
+
+
+def test_claude_chip_falls_back_when_a_window_is_missing():
+    snap = _snap(
+        "anthropic",
+        Metric(key="seven_day", label="7d", used=2, limit=100, unit="%", percent_used=2),
+    )
+    assert [m.key for m in chip_metrics(snap)] == ["seven_day"]
+
+
+def test_cursor_chip_shows_included_and_api_together():
+    """API is the gauge that actually risks an overrun — Included alone used to hide it."""
+    snap = _snap(
+        "cursor",
+        Metric(key="included", label="Included plan", used=11, limit=100, unit="%", percent_used=11),
+        Metric(key="api", label="API models", used=70, limit=100, unit="%", percent_used=70),
+        Metric(key="auto", label="Auto models", used=5, limit=100, unit="%", percent_used=5),
+    )
+    assert [m.key for m in chip_metrics(snap)] == ["included", "api"]
+
+
+def test_other_providers_keep_a_single_chip_gauge():
+    snap = _snap(
+        "copilot",
+        Metric(key="premium", label="Premium requests", used=1, limit=100, unit="%", percent_used=1),
+    )
+    assert [m.key for m in chip_metrics(snap)] == ["premium"]
+
+
+def test_chip_metric_tag_is_short_for_known_keys_and_falls_back_to_the_label():
+    assert chip_metric_tag(Metric(key="included", label="Included plan", used=0, limit=100, unit="%")) == "Incl"
+    assert chip_metric_tag(Metric(key="api", label="API models", used=0, limit=100, unit="%")) == "API"
+    assert chip_metric_tag(Metric(key="seven_day", label="7d", used=0, limit=100, unit="%")) == "7d"
+    assert chip_metric_tag(Metric(key="premium", label="Premium requests", used=0, limit=100, unit="%")) == "Premium requests"
+
+
+def test_icon_is_only_urgent_when_a_real_alert_fired():
+    """A raw 70% on one metric with no crossed threshold must stay the plain/ok icon —
+    this is exactly the Cursor 'API models 70%' case that used to force the badge red/orange."""
+    snap = _snap(
+        "cursor",
+        Metric(key="api", label="API models", used=70, limit=100, unit="%", percent_used=70),
+    )
+    color, urgent = icon_severity([snap], alerts=[])
+    assert urgent is False
+    assert color.name() == "#3dd68c"
+
+
+def test_icon_turns_urgent_on_a_warn_alert():
+    alert = Alert(level=AlertLevel.WARN, provider_id="cursor", code="api_high", title="t", body="b")
+    color, urgent = icon_severity([], alerts=[alert])
+    assert urgent is True
+    assert color.name() == "#ffb020"
+
+
+def test_icon_turns_urgent_on_a_critical_alert():
+    alert = Alert(level=AlertLevel.CRITICAL, provider_id="cursor", code="api_critical", title="t", body="b")
+    color, urgent = icon_severity([], alerts=[alert])
+    assert urgent is True
+    assert color.name() == "#ff5c5c"
+
+
+def test_icon_turns_urgent_when_a_provider_errors_even_without_an_alert_object():
+    snap = ProviderSnapshot(provider_id="cursor", title="Cursor", ok=False, fetched_at=utc_now(), error="boom")
+    color, urgent = icon_severity([snap], alerts=[])
+    assert urgent is True
+    assert color.name() == "#ffb020"
+
+
+def test_shared_cycle_gets_one_reset_countdown_not_one_per_gauge():
+    """Cursor's Included/API/Auto reset together — repeating '25d' three times
+    is noise, not clarity."""
+    cycle_end = NOW + timedelta(days=25)
+    snap = ProviderSnapshot(
+        provider_id="cursor",
+        title="Cursor",
+        ok=True,
+        fetched_at=NOW,
+        cycle_end=cycle_end,
+        metrics=[
+            Metric(key="included", label="Included plan", used=11, limit=100, unit="%", percent_used=11),
+            Metric(key="api", label="API models", used=70, limit=100, unit="%", percent_used=70),
+        ],
+    )
+    shared, per_metric = grouped_reset_etas(snap, snap.metrics, NOW)
+    assert shared == "25d"
+    assert per_metric == {}
+
+
+def test_rolling_windows_each_keep_their_own_countdown():
+    """Claude's 5h and 7d genuinely reset at different times — must not collapse."""
+    snap = ProviderSnapshot(
+        provider_id="anthropic",
+        title="Claude",
+        ok=True,
+        fetched_at=NOW,
+        metrics=[
+            Metric(
+                key="five_hour", label="5h", used=8, limit=100, unit="%", percent_used=8,
+                cycle_end=NOW + timedelta(hours=3, minutes=14),
+            ),
+            Metric(
+                key="seven_day", label="7d", used=2, limit=100, unit="%", percent_used=2,
+                cycle_end=NOW + timedelta(days=6),
+            ),
+        ],
+    )
+    shared, per_metric = grouped_reset_etas(snap, snap.metrics, NOW)
+    assert shared == ""
+    assert per_metric == {"five_hour": "3h14m", "seven_day": "6d"}

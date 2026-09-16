@@ -30,6 +30,9 @@ class Metric:
     remaining: float | None = None
     percent_used: float | None = None
     detail: str = ""
+    # Optional per-metric quota window (rolling 5h / weekly / …).
+    cycle_start: datetime | None = None
+    cycle_end: datetime | None = None
 
     def resolved_percent(self) -> float | None:
         if self.percent_used is not None:
@@ -86,3 +89,7 @@ class BurnProjection:
     days_left: float | None
     will_exhaust: bool
     note: str = ""
+    # Days until limit at current avg burn (None = unknown / idle).
+    days_to_exhaust: float | None = None
+    # days_to_exhaust − days until renewal: −1 = one day before reset.
+    renewal_offset_days: float | None = None

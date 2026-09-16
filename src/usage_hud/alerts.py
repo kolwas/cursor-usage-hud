@@ -75,15 +75,22 @@ def evaluate_alerts(
                 )
             elif proj.will_exhaust:
                 days = f"{proj.days_left:.1f}d" if proj.days_left is not None else "?"
+                if proj.renewal_offset_days is not None:
+                    off = int(round(proj.renewal_offset_days))
+                    offset_txt = "0d" if off == 0 else f"{off:+d}d"
+                    body = (
+                        f"{metric.label} hits ~{offset_txt} vs renewal "
+                        f"({days} left in cycle)"
+                    )
+                else:
+                    body = f"{metric.label} may hit limit before reset ({days} left)"
                 alerts.append(
                     Alert(
                         level=AlertLevel.WARN,
                         provider_id=snap.provider_id,
                         code=f"{metric.key}_projected",
                         title=f"{snap.title}: projected overrun",
-                        body=(
-                            f"{metric.label} may hit limit before reset ({days} left)"
-                        ),
+                        body=body,
                     )
                 )
 

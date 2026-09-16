@@ -14,21 +14,24 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("gui", help="Launch HUD + tray (default)")
     p_status = sub.add_parser("status", help="Print one-shot usage to stdout")
     p_status.add_argument("--json", action="store_true")
+    p_status.add_argument(
+        "--all",
+        action="store_true",
+        help="Include empty / not-entitled providers",
+    )
 
     args = parser.parse_args(argv)
     cmd = args.cmd or "gui"
 
     if cmd == "status":
         from usage_hud.config import Settings
-        from usage_hud.providers.cloud import CloudStubProvider
-        from usage_hud.providers.cursor import CursorProvider
-        from usage_hud.providers.github import GitHubProvider
+        from usage_hud.providers.registry import discover_providers, visible_snapshots
 
         settings = Settings.load()
-        providers = [CursorProvider(), GitHubProvider(settings)]
-        if settings.enable_cloud_stub:
-            providers.append(CloudStubProvider())
+        providers = discover_providers(settings)
         snaps = [p.fetch() for p in providers]
+        if not args.all:
+            snaps = visible_snapshots(snaps)
         if args.json:
             payload = []
             for s in snaps:
@@ -58,17 +61,22 @@ def main(argv: list[str] | None = None) -> None:
             print(json.dumps(payload, indent=2))
             return
 
+        print(f"providers discovered: {len(providers)} · showing: {len(snaps)}")
         for s in snaps:
             print(f"== {s.title} ==")
             if not s.ok:
                 print(f"  ERROR: {s.error}")
+                continue
+            if not s.metrics:
+                print(f"  (no meters) {s.message}")
                 continue
             for m in s.metrics:
                 pct = m.resolved_percent()
                 pct_txt = f"{pct:.1f}%" if pct is not None else "n/a"
                 rem = m.resolved_remaining()
                 rem_txt = f" left={rem:g}{m.unit}" if rem is not None else ""
-                print(f"  {m.label}: {m.used:g}{m.unit}/{m.limit}{m.unit if m.limit is not None else ''} ({pct_txt}){rem_txt}")
+                lim = f"{m.limit:g}{m.unit}" if m.limit is not None else "∞"
+                print(f"  {m.label}: {m.used:g}{m.unit}/{lim} ({pct_txt}){rem_txt}")
                 if m.detail:
                     print(f"    {m.detail}")
             if s.message:
