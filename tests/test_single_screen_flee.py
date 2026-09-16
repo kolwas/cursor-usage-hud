@@ -94,3 +94,34 @@ def test_pinned_details_are_never_relocated(panel, monkeypatch):
     _set_cursor(monkeypatch, QPoint(geo.center().x(), geo.center().y()))
     panel._check_single_screen_proximity()
     assert panel.frameGeometry().topLeft() == before
+
+
+def test_periodic_redock_does_not_flicker_it_back_while_fled(panel, monkeypatch):
+    """Reproduces the reported flicker: mouse stationary on the left, chip
+    flees right, then the unrelated periodic re-dock timer (_auto_dock,
+    every 2.5s — and update_view()'s per-refresh dock_to_taskbar) used to
+    silently snap it straight back to the left-docked spot a couple of
+    seconds later, which put the still-stationary cursor "near" it again and
+    fled it right again — an endless loop with the mouse never moving.
+    """
+    _skip_if_multi_monitor()
+    avail = QGuiApplication.primaryScreen().availableGeometry()
+    geo = panel.frameGeometry()
+    left_cursor = QPoint(geo.right() + 20, geo.top())  # near the original left dock
+
+    _set_cursor(monkeypatch, left_cursor)
+    panel._check_single_screen_proximity()
+    fled_geo = panel.frameGeometry()
+    assert fled_geo.center().x() > avail.left() + avail.width() / 2  # now on the right
+
+    # The cursor never moved. Every background re-dock call must be a no-op
+    # while fled — none of them know a flee is in progress.
+    panel._auto_dock()
+    panel.dock_to_taskbar(force=True)
+    panel.update_view(panel._snapshots, panel._projections, panel._alerts)
+    assert panel.frameGeometry().topLeft() == fled_geo.topLeft()
+
+    # Only the proximity check itself may bring it home, and only by hovering there.
+    _set_cursor(monkeypatch, QPoint(fled_geo.left() - 20, fled_geo.top()))
+    panel._check_single_screen_proximity()
+    assert panel.frameGeometry().center().x() < avail.left() + avail.width() / 2

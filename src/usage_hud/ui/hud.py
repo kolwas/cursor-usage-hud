@@ -87,6 +87,9 @@ class WeatherPanel(QWidget):
         # from self._projections, which only carries the derived burn-rate
         # numbers, not the raw observed samples.
         self._history = history
+        # True while parked on the single-monitor "away" (right) side — see
+        # _check_single_screen_proximity and dock_to_taskbar's own guard.
+        self._single_screen_away = False
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -176,8 +179,17 @@ class WeatherPanel(QWidget):
         of THIS screen on approach — sitting on the left, hovering sends it
         right, and hovering again (it's now on the right) sends it back
         left. Triggers within _HOVER_MARGIN, not just on direct contact.
+
+        While parked on the "away" side, dock_to_taskbar() is blocked (see
+        its own guard) — without that, the unrelated periodic re-dock timer
+        (_auto_dock, every 2.5s) kept silently snapping the chip back to its
+        normal left-docked spot a couple of seconds after every flee, which
+        looked like random flicker with the cursor just sitting there.
         """
-        if len(QGuiApplication.screens()) > 1 or not self._flee_eligible():
+        if len(QGuiApplication.screens()) > 1:
+            self._single_screen_away = False
+            return
+        if not self._flee_eligible():
             return
 
         near = (
@@ -196,6 +208,7 @@ class WeatherPanel(QWidget):
         on_right_half = geo.center().x() > avail.left() + avail.width() / 2
         x = avail.left() + 16 if on_right_half else avail.right() - self.width() - 16
         x = max(avail.left() + 8, min(x, avail.right() - self.width() - 8))
+        self._single_screen_away = not on_right_half  # landing on the right now
         self.move(x, geo.top())
         if self.isVisible():
             self.raise_()
@@ -332,6 +345,13 @@ class WeatherPanel(QWidget):
         if self._manual_pos and not force:
             return
         if self._drag_offset is not None:
+            return
+        if self._single_screen_away:
+            # Parked on the single-monitor "away" side to duck the cursor —
+            # every caller here always docks back to the normal (left) spot,
+            # force=True included, none of them know about the flee. Only
+            # _check_single_screen_proximity's own hover-triggered move is
+            # allowed to bring it back.
             return
         screen = self._target_screen or idle_screen()
         if screen is None:
