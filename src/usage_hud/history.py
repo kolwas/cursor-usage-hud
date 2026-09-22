@@ -31,32 +31,44 @@ _WARMUP_FLOOR_DAYS = 1.0 / 24.0  # 1 hour
 # midnight, when there is barely any "today" for `hot` to compare against.
 _ROCKET_WINDOW_MINUTES = 45
 _ROCKET_MIN_COVERAGE = 0.4  # need to have actually observed this much of the window
-_ROCKET_MIN_DELTA = 5.0  # percentage points — ignore noise on a near-flat gauge
+_ROCKET_MIN_DELTA = 8.0  # percentage points — ignore noise on a near-flat gauge
+# Used only when there's no older history to compare the recent pace to —
+# an absolute "this alone is fast" floor, in points/hour.
+_ROCKET_ABSOLUTE_FLOOR = 15.0
 
 
 def _recent_spike(
     series: list[dict[str, Any]],
     metric_key: str,
     now: datetime,
-    avg_daily: float,
     multiplier: float,
     *,
     window_minutes: int = _ROCKET_WINDOW_MINUTES,
 ) -> bool:
-    """Is this metric's pace over the last ~window_minutes far above its own
-    usual (avg_daily) rate — a burst happening right now?"""
+    """Is this metric's pace over the last ~window_minutes far above its OWN
+    recent-past pace — a burst happening right now?
+
+    Deliberately does NOT compare against avg_daily: for a short rolling
+    window (Claude's 5h) avg_daily is itself computed from a tiny elapsed
+    slice, so it is already inflated by the very burst this is supposed to
+    catch — comparing a spike to a baseline the spike has already poisoned
+    can never trip. Instead this compares the last window_minutes against
+    the pace over the OLDER history in the same series (before that
+    window), a baseline the recent burst hasn't touched.
+    """
     cutoff = now - timedelta(minutes=window_minutes)
-    recent = [
-        (_parse_ts(s["ts"]), _metric_level(s, metric_key))
+    points = sorted(
+        (_parse_ts(s["ts"]), lvl)
         for s in series
-        if _parse_ts(s["ts"]) >= cutoff
-    ]
-    points = [(t, v) for t, v in recent if v is not None]
-    if len(points) < 2:
+        if (lvl := _metric_level(s, metric_key)) is not None
+    )
+    recent = [(t, v) for t, v in points if t >= cutoff]
+    older = [(t, v) for t, v in points if t < cutoff]
+    if len(recent) < 2:
         return False
 
-    t0, v0 = points[0]
-    t1, v1 = points[-1]
+    t0, v0 = recent[0]
+    t1, v1 = recent[-1]
     elapsed_hours = (t1 - t0).total_seconds() / 3600.0
     if elapsed_hours < (window_minutes / 60.0) * _ROCKET_MIN_COVERAGE:
         return False  # two samples seconds apart inside the window isn't a trend
@@ -64,10 +76,19 @@ def _recent_spike(
     delta = max(0.0, v1 - v0)
     if delta < _ROCKET_MIN_DELTA:
         return False
-
     recent_rate_per_hour = delta / max(elapsed_hours, 1e-6)
-    baseline_per_hour = avg_daily / 24.0
-    return recent_rate_per_hour >= multiplier * max(baseline_per_hour, 0.1)
+
+    if len(older) >= 2:
+        ot0, ov0 = older[0]
+        ot1, ov1 = older[-1]
+        older_hours = max((ot1 - ot0).total_seconds() / 3600.0, 1e-6)
+        baseline_per_hour = max(0.0, ov1 - ov0) / older_hours
+        if baseline_per_hour > 0.5:
+            return recent_rate_per_hour >= multiplier * baseline_per_hour
+
+    # No usable older pace (flat, absent, or negligible) — fall back to an
+    # absolute "this alone is fast" floor instead of comparing to nothing.
+    return recent_rate_per_hour >= _ROCKET_ABSOLUTE_FLOOR
 
 
 def _fmt_offset(days: float) -> str:
@@ -344,7 +365,7 @@ class HistoryStore:
                     renewal_offset = days_to_exhaust - days_left
 
                 hot = avg_daily > 0 and used_today >= burn_multiplier * max(avg_daily, 1e-9)
-                rocketing = _recent_spike(series, metric.key, now, avg_daily, burn_multiplier)
+                rocketing = _recent_spike(series, metric.key, now, burn_multiplier)
                 rate_label = f"~{avg_daily:.2f}%/day" if unit_is_pct else f"~{avg_daily:.1f}/day"
                 confidence_note = "" if confident else " (early estimate)"
 

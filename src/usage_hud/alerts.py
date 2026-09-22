@@ -60,7 +60,7 @@ def evaluate_alerts(
             proj = by_key.get((snap.provider_id, metric.key))
             if not proj:
                 continue
-            if "burning hot" in proj.note:
+            if proj.hot:
                 alerts.append(
                     Alert(
                         level=AlertLevel.CRITICAL,
@@ -71,6 +71,18 @@ def evaluate_alerts(
                             f"{metric.label}: +{proj.used_today:.2f}{metric.unit} today "
                             f"vs avg {proj.avg_daily:.2f}{metric.unit}/day"
                         ),
+                    )
+                )
+            elif proj.rocketing:
+                pct = metric.resolved_percent()
+                now_txt = f" — now at {pct:.0f}%" if pct is not None else ""
+                alerts.append(
+                    Alert(
+                        level=AlertLevel.CRITICAL,
+                        provider_id=snap.provider_id,
+                        code=f"{metric.key}_rocketing",
+                        title=f"{snap.title}: {metric.label} spiking right now",
+                        body=f"Usage jumped fast in the last ~45 min{now_txt}. Ease off.",
                     )
                 )
             elif proj.will_exhaust:

@@ -235,6 +235,46 @@ def test_slow_steady_climb_is_not_flagged_rocketing(tmp_path):
     assert proj.rocketing is False
 
 
+def test_rocketing_fires_on_a_short_rolling_window_despite_inflated_avg_daily(tmp_path):
+    """Regression: on a short window (like Claude's 5h) barely into its own
+    cycle, avg_daily is computed from a tiny elapsed slice and is already
+    huge — comparing the recent burst to THAT baseline can mathematically
+    never trip, which is exactly the bug this reproduces and fixes. The
+    detector must compare against the metric's own OLDER history instead.
+    """
+    store = HistoryStore(tmp_path / "history.json")
+    cycle_start = NOW - timedelta(hours=1, minutes=30)
+    cycle_end = cycle_start + timedelta(hours=5)
+
+    def five_hour_snap(ts: datetime, used: float) -> ProviderSnapshot:
+        return ProviderSnapshot(
+            provider_id="anthropic",
+            title="Claude",
+            ok=True,
+            fetched_at=ts,
+            cycle_start=cycle_start,
+            cycle_end=cycle_end,
+            metrics=[
+                Metric(
+                    key="five_hour", label="5h", used=used, limit=100.0, unit="%",
+                    percent_used=used, cycle_end=cycle_end,
+                )
+            ],
+        )
+
+    # Flat for the first hour of the window...
+    store.record([five_hour_snap(NOW - timedelta(minutes=80), 5.0)])
+    store.record([five_hour_snap(NOW - timedelta(minutes=60), 5.0)])
+    # ...then a fast climb in the last 45 minutes.
+    store.record([five_hour_snap(NOW - timedelta(minutes=38), 5.0)])
+    snap = five_hour_snap(NOW, 24.0)
+    store.record([snap])
+
+    proj = _proj(store, snap, key="five_hour")
+    assert proj.avg_daily > 100  # confirms the trap: already-inflated baseline
+    assert proj.rocketing is True
+
+
 def test_two_samples_a_minute_apart_are_not_enough_of_a_trend(tmp_path):
     """A tiny observed slice inside the 45-minute window must not trip the
     detector just because two samples a minute apart imply a huge %/hour
