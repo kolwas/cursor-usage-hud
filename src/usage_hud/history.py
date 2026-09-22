@@ -136,6 +136,21 @@ def _metric_level(sample: dict[str, Any], key: str) -> float | None:
     return None
 
 
+def _metric_cycle_end(sample: dict[str, Any], key: str) -> str | None:
+    """This ONE metric's own cycle_end from a stored sample — not the
+    sample's top-level (snapshot) cycle_end, which for a multi-window
+    provider is just whichever metric happened to be first (Claude's
+    snapshot-level cycle_end is always five_hour's). Filtering seven_day's
+    history by the snapshot-level field silently scoped it to "since the
+    5h window last reset" instead of "since the 7d window last reset" —
+    a few hours of history standing in for a week's worth every time.
+    """
+    for m in sample.get("metrics") or []:
+        if m.get("key") == key:
+            return m.get("cycle_end")
+    return None
+
+
 def _metric_window(
     snap: ProviderSnapshot,
     metric: Metric,
@@ -314,7 +329,7 @@ class HistoryStore:
                     same_cycle = [
                         s
                         for s in series
-                        if _cycle_end_key(s.get("cycle_end")) == cycle_key
+                        if _cycle_end_key(_metric_cycle_end(s, metric.key)) == cycle_key
                     ]
                     if len(same_cycle) >= 2:
                         series = same_cycle

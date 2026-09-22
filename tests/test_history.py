@@ -84,6 +84,80 @@ def test_same_rate_is_trusted_once_the_window_has_run_a_while(tmp_path):
     assert "(early estimate)" not in proj.note
 
 
+def _two_window_snap(
+    *, now: datetime, five_hour_cycle_end: datetime, seven_day_cycle_end: datetime, seven_day_used: float
+) -> ProviderSnapshot:
+    """Mirrors anthropic.py's real shape: the snapshot-level cycle_end is
+    always the FIRST metric's (five_hour's) — the same field a second,
+    differently-scheduled metric's history got wrongly filtered by."""
+    return ProviderSnapshot(
+        provider_id="anthropic",
+        title="Claude",
+        ok=True,
+        fetched_at=now,
+        cycle_end=five_hour_cycle_end,
+        metrics=[
+            Metric(
+                key="five_hour", label="5h", used=10.0, limit=100.0, unit="%",
+                percent_used=10.0, cycle_end=five_hour_cycle_end,
+            ),
+            Metric(
+                key="seven_day", label="7d", used=seven_day_used, limit=100.0, unit="%",
+                percent_used=seven_day_used, cycle_end=seven_day_cycle_end,
+            ),
+        ],
+    )
+
+
+def test_a_second_windows_history_is_not_scoped_by_the_first_windows_resets(tmp_path):
+    """Regression: the "same cycle" filter compared each stored sample's
+    SNAPSHOT-level cycle_end against the current one — but for Claude that
+    field is always five_hour's, not whichever metric is actually being
+    projected. Every time the 5h window reset (~every 5h), seven_day's own
+    week-long history got silently re-scoped down to "since the 5h window
+    last reset" — a few hours standing in for as much as a week, because
+    the two windows share no real relationship at all.
+    """
+    store = HistoryStore(tmp_path / "history.json")
+    seven_day_end = NOW + timedelta(days=6)  # stable — the 7d window doesn't move
+
+    # Two 5h resets happen across this stretch (the exact boundaries don't
+    # matter — only that the snapshot-level cycle_end keeps changing while
+    # seven_day's own stays put).
+    store.record([_two_window_snap(
+        now=NOW - timedelta(hours=20), five_hour_cycle_end=NOW - timedelta(hours=15),
+        seven_day_cycle_end=seven_day_end, seven_day_used=1.0,
+    )])
+    store.record([_two_window_snap(
+        now=NOW - timedelta(hours=15), five_hour_cycle_end=NOW - timedelta(hours=10),
+        seven_day_cycle_end=seven_day_end, seven_day_used=1.2,
+    )])
+    store.record([_two_window_snap(
+        now=NOW - timedelta(hours=10), five_hour_cycle_end=NOW - timedelta(hours=5),
+        seven_day_cycle_end=seven_day_end, seven_day_used=1.4,
+    )])
+    # A 5h reset just happened — this and the next sample share the SAME
+    # (current) five_hour cycle_end, which is exactly the case that used to
+    # wrongly narrow seven_day's history down to just these two points.
+    store.record([_two_window_snap(
+        now=NOW - timedelta(hours=5), five_hour_cycle_end=NOW,
+        seven_day_cycle_end=seven_day_end, seven_day_used=1.6,
+    )])
+    snap = _two_window_snap(
+        now=NOW - timedelta(hours=1), five_hour_cycle_end=NOW,
+        seven_day_cycle_end=seven_day_end, seven_day_used=8.0,
+    )
+    store.record([snap])
+
+    proj = _proj(store, snap, key="seven_day")
+
+    # Correct: the full ~19h span (1.0% -> 8.0%) -> roughly 8-9%/day.
+    assert 5.0 < proj.avg_daily < 12.0
+    # The bug's answer used only the last two (same 5h cycle_end) samples,
+    # 1.6% -> 8.0% over 4h -> ~38%/day — well outside the correct range.
+    assert proj.avg_daily < 30.0
+
+
 def test_real_history_overrides_the_tautological_cycle_pace_for_an_inferred_start(tmp_path):
     """Regression: when no provider reports a real cycle_start (Claude never
     does), the backward-inferred one is built FROM percent_used and
