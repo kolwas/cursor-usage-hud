@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +25,49 @@ _MAX_SAMPLES = 8000
 # before trusting the rate enough to project an exhaustion date from it.
 _WARMUP_FRACTION = 0.10
 _WARMUP_FLOOR_DAYS = 1.0 / 24.0  # 1 hour
+
+# "Rocketing": a short-window burst, independent of `hot`'s whole-day
+# comparison — catches a burst happening right now even a few minutes after
+# midnight, when there is barely any "today" for `hot` to compare against.
+_ROCKET_WINDOW_MINUTES = 45
+_ROCKET_MIN_COVERAGE = 0.4  # need to have actually observed this much of the window
+_ROCKET_MIN_DELTA = 5.0  # percentage points — ignore noise on a near-flat gauge
+
+
+def _recent_spike(
+    series: list[dict[str, Any]],
+    metric_key: str,
+    now: datetime,
+    avg_daily: float,
+    multiplier: float,
+    *,
+    window_minutes: int = _ROCKET_WINDOW_MINUTES,
+) -> bool:
+    """Is this metric's pace over the last ~window_minutes far above its own
+    usual (avg_daily) rate — a burst happening right now?"""
+    cutoff = now - timedelta(minutes=window_minutes)
+    recent = [
+        (_parse_ts(s["ts"]), _metric_level(s, metric_key))
+        for s in series
+        if _parse_ts(s["ts"]) >= cutoff
+    ]
+    points = [(t, v) for t, v in recent if v is not None]
+    if len(points) < 2:
+        return False
+
+    t0, v0 = points[0]
+    t1, v1 = points[-1]
+    elapsed_hours = (t1 - t0).total_seconds() / 3600.0
+    if elapsed_hours < (window_minutes / 60.0) * _ROCKET_MIN_COVERAGE:
+        return False  # two samples seconds apart inside the window isn't a trend
+
+    delta = max(0.0, v1 - v0)
+    if delta < _ROCKET_MIN_DELTA:
+        return False
+
+    recent_rate_per_hour = delta / max(elapsed_hours, 1e-6)
+    baseline_per_hour = avg_daily / 24.0
+    return recent_rate_per_hour >= multiplier * max(baseline_per_hour, 0.1)
 
 
 def _fmt_offset(days: float) -> str:
@@ -301,12 +344,15 @@ class HistoryStore:
                     renewal_offset = days_to_exhaust - days_left
 
                 hot = avg_daily > 0 and used_today >= burn_multiplier * max(avg_daily, 1e-9)
+                rocketing = _recent_spike(series, metric.key, now, avg_daily, burn_multiplier)
                 rate_label = f"~{avg_daily:.2f}%/day" if unit_is_pct else f"~{avg_daily:.1f}/day"
                 confidence_note = "" if confident else " (early estimate)"
 
                 note = ""
                 if hot:
                     note = "today burning hot"
+                elif rocketing:
+                    note = f"spiking right now (~{_ROCKET_WINDOW_MINUTES}m)"
                 elif will_exhaust and renewal_offset is not None:
                     note = f"exhaust {_fmt_offset(renewal_offset)} vs renewal{confidence_note}"
                 elif will_exhaust:
@@ -333,6 +379,7 @@ class HistoryStore:
                         days_elapsed=elapsed_since_start,
                         confident=confident,
                         hot=hot,
+                        rocketing=rocketing,
                     )
                 )
         return out

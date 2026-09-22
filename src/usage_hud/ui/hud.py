@@ -43,6 +43,11 @@ _ETA_COLOR = {"bad": "#ff8a80", "warn": "#ffb020", "ok": "#8ec8ff", "tentative":
 _HOVER_MARGIN = 44
 _PROXIMITY_POLL_MS = 250
 
+# A "rocketing" (short-window spike) gauge's timeline chart is drawn this
+# wide instead of the normal 38px — nearly double, so the row is visibly
+# bigger before anyone reads the note text.
+_ROCKET_CHART_WIDTH = 70
+
 
 def _ui_font(point_size: int = 9, bold: bool = False) -> QFont:
     """Prefer system UI font (Noto/Sans on KDE, Segoe on Windows)."""
@@ -488,12 +493,17 @@ class WeatherPanel(QWidget):
                 else _ETA_COLOR["tentative"]
             )
 
+        rocketing = bool(proj and proj.rocketing)
         return mini_charts.burn_timeline_icon(
             elapsed_frac,
             exhaust_frac,
-            marker,
+            QColor("#ff3b3b") if rocketing else marker,
             confident=confident,
             usage_pct=metric.resolved_percent(),
+            # A short-window spike gets a visibly wider chart than a normal
+            # row — the row itself stands out before anyone even reads the
+            # note text.
+            width=_ROCKET_CHART_WIDTH if rocketing else 38,
         )
 
     def _sparkline_html(

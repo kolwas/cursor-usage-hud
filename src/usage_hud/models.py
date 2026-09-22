@@ -104,3 +104,9 @@ class BurnProjection:
     # both the CRITICAL "burning hot" alert and a skull marker on the
     # sparkline, so a sudden spike is flagged in both places at once.
     hot: bool = False
+    # True = a short-window (~45 min) spike far above the metric's own usual
+    # pace — distinct from `hot` (a whole-day comparison): this catches a
+    # burst happening right now even early in the day, when `hot`'s
+    # used_today-vs-avg_daily comparison wouldn't yet have enough of the day
+    # behind it to trip. Widens the timeline chart so it stands out.
+    rocketing: bool = False

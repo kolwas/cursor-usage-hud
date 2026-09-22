@@ -208,3 +208,42 @@ def test_steady_pace_is_not_flagged_hot(tmp_path):
 
     proj = _proj(store, snap, key="included")
     assert proj.hot is False
+
+
+def test_short_window_burst_is_flagged_rocketing(tmp_path):
+    """A fast climb in the last ~45 minutes, independent of `hot`'s whole-day
+    comparison — this must fire even early in the day when 'today' barely
+    has any history behind it yet for `hot` to compare against."""
+    store = HistoryStore(tmp_path / "history.json")
+    store.record([_cursor_snap(NOW - timedelta(days=10), 2.0)])
+    store.record([_cursor_snap(NOW - timedelta(minutes=40), 5.0)])
+    snap = _cursor_snap(NOW, 25.0)
+    store.record([snap])
+
+    proj = _proj(store, snap, key="included")
+    assert proj.rocketing is True
+
+
+def test_slow_steady_climb_is_not_flagged_rocketing(tmp_path):
+    store = HistoryStore(tmp_path / "history.json")
+    store.record([_cursor_snap(NOW - timedelta(days=10), 2.0)])
+    store.record([_cursor_snap(NOW - timedelta(minutes=40), 9.5)])
+    snap = _cursor_snap(NOW, 10.0)
+    store.record([snap])
+
+    proj = _proj(store, snap, key="included")
+    assert proj.rocketing is False
+
+
+def test_two_samples_a_minute_apart_are_not_enough_of_a_trend(tmp_path):
+    """A tiny observed slice inside the 45-minute window must not trip the
+    detector just because two samples a minute apart imply a huge %/hour
+    rate — need to have actually watched a real chunk of the window."""
+    store = HistoryStore(tmp_path / "history.json")
+    store.record([_cursor_snap(NOW - timedelta(days=10), 2.0)])
+    store.record([_cursor_snap(NOW - timedelta(minutes=1), 5.0)])
+    snap = _cursor_snap(NOW, 10.0)
+    store.record([snap])
+
+    proj = _proj(store, snap, key="included")
+    assert proj.rocketing is False
