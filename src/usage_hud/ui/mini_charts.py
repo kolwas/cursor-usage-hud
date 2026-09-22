@@ -18,10 +18,10 @@ import base64
 from PySide6.QtCore import QBuffer, QIODevice, QPointF, Qt
 from PySide6.QtGui import QColor, QPainter, QPen, QPixmap, QPolygonF
 
-_TRACK = QColor(255, 255, 255, 90)
-_ELAPSED = QColor(235, 238, 245, 255)
-_ELAPSED_DIM = QColor(180, 186, 198, 130)
-_LOW_USAGE_PCT = 20.0
+_TRACK = QColor(255, 255, 255, 70)
+# Dim on purpose — "time elapsed so far" is background context, not the
+# thing to look at, so it must never out-compete the exhaustion flag below.
+_ELAPSED = QColor(150, 156, 170, 210)
 _UNKNOWN = QColor(255, 255, 255, 120)
 _DOT_HALO = QColor(12, 14, 20, 210)
 _HOT = QColor(255, 61, 61, 255)
@@ -107,32 +107,39 @@ def burn_timeline_icon(
     marker_color: QColor,
     *,
     confident: bool = True,
-    usage_pct: float | None = None,
     width: int = 38,
     height: int = 10,
 ) -> str:
-    """A tiny horizontal timeline: cycle_start..cycle_end as the full bar,
-    filled up to "now", with a dot marking the projected exhaustion date —
-    the prediction as a picture instead of a signed day count.
+    """A tiny horizontal timeline: cycle_start..cycle_end as the full bar.
+
+    One thing to read, not two: a dim grey fill for "time elapsed so far"
+    (background context — nobody needs to act on this) and, only when a
+    projection exists, a single coloured FLAG — a tick spanning the bar's
+    full height — marking where the current burn rate would exhaust the
+    quota. No flag drawn = nothing projected. The flag's colour is the same
+    severity colour used in the text ETA columns next to it, so there is
+    one colour convention for the whole chip, not a separate one to learn
+    for this picture.
+
+    A plain 3px dot used to carry the exhaustion marker; at chip scale it
+    read as texture rather than a deliberate mark, and it was easy to
+    mistake for "this row is fine" when it was actually the row saying
+    "you're about to run out." A full-height flag is harder to miss and
+    impossible to mistake for the track underneath it.
 
     Sized and contrasted to still read at chip scale: an opaque dark plate
     behind the whole bar (the chip window is translucent, so a merely
     semi-transparent fill would blend into whatever is on the real desktop
-    behind it, not into a predictable dark panel), a 3px track, a 4px dot
-    with a dark halo so it stays visible over light or dark fills alike.
-
-    The elapsed fill is bright by default, but ``usage_pct`` below
-    ``_LOW_USAGE_PCT`` dims it — the bar otherwise encodes only "how far
-    into the cycle are we", which lit up just as brightly on a gauge at 0%
-    as one at 90%, loud for something that needs zero attention.
+    behind it, not into a predictable dark panel), plus a dark halo behind
+    the flag so it stays visible over light or dark fills alike.
 
     ``elapsed_frac=None`` (no cycle_end to place "now" on) draws a dashed
     empty track — same size and position as every other row's timeline, just
-    with nothing plotted on it yet. ``confident=False`` still plots the dot
-    (predictions are never withheld) but as a hollow ring instead of a solid
-    fill, so an early/noisy estimate reads as tentative rather than final.
+    with nothing plotted on it yet. ``confident=False`` still draws the flag
+    (predictions are never withheld) but dashed instead of solid — the same
+    "tentative" convention as the "~" marker in the text columns.
     """
-    bar_h = 3
+    bar_h = 4
     pix = QPixmap(width, height)
     pix.fill(QColor(0, 0, 0, 0))
     painter = QPainter(pix)
@@ -157,25 +164,23 @@ def burn_timeline_icon(
     painter.drawRoundedRect(1, int(track_y), width - 2, bar_h, 1, 1)
 
     if elapsed_frac > 0:
-        dim = usage_pct is not None and usage_pct < _LOW_USAGE_PCT
-        painter.setBrush(_ELAPSED_DIM if dim else _ELAPSED)
+        painter.setBrush(_ELAPSED)
         painter.drawRoundedRect(1, int(track_y), max(3, round((width - 2) * elapsed_frac)), bar_h, 1, 1)
 
     if exhaust_frac is not None:
         x = max(0.0, min(1.0, exhaust_frac)) * (width - 4) + 2.0
-        center = QPointF(x, height / 2)
-        # Dark halo first so the dot reads on any background, then the dot.
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(_DOT_HALO)
-        painter.drawEllipse(center, 4.0, 4.0)
+        painter.drawRoundedRect(x - 1.6, 0.5, 3.2, height - 1.0, 1, 1)
         if confident:
-            painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(marker_color)
+            painter.drawRoundedRect(x - 0.8, 0.5, 1.6, height - 1.0, 0.8, 0.8)
         else:
             pen = QPen(marker_color)
-            pen.setWidthF(1.3)
+            pen.setWidthF(1.4)
+            pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(pen)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawEllipse(center, 3.0, 3.0)
+            painter.drawLine(QPointF(x, 1.0), QPointF(x, height - 1.0))
 
     painter.end()
     return _img_tag(_data_uri(pix), width, height)

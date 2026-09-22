@@ -88,3 +88,34 @@ def test_rocketing_is_a_distinct_colour_not_a_size_change():
 
     assert _width(calm) == _width(spiking)
     assert calm != spiking  # still visually distinct — via colour
+
+
+def test_alarming_row_gets_a_whole_row_background_tint():
+    """Colour on the tiny chart/ETA cells alone was too easy to miss at a
+    glance (the original complaint about the Cursor 'api' gauge not standing
+    out) — a confirmed at-risk or rocketing row must tint its whole <tr>,
+    while a calm or merely-tentative one must not."""
+    from usage_hud.ui.hud import WeatherPanel
+
+    snap, metric = _snap_and_metric()
+    snap.metrics.append(metric)
+
+    def _chip_html_for(proj: BurnProjection) -> str:
+        panel = WeatherPanel()
+        panel._snapshots = [snap]
+        panel._projections = [proj]
+        try:
+            return panel._chip_html()
+        finally:
+            panel.deleteLater()
+
+    calm_html = _chip_html_for(_proj())
+    rocketing_html = _chip_html_for(_proj(rocketing=True))
+    at_risk_html = _chip_html_for(_proj(will_exhaust=True, confident=True))
+    tentative_at_risk_html = _chip_html_for(_proj(will_exhaust=True, confident=False))
+
+    assert WeatherPanel._CHIP_ALARM_BG not in calm_html
+    assert WeatherPanel._CHIP_ALARM_BG in rocketing_html
+    assert WeatherPanel._CHIP_ALARM_BG in at_risk_html
+    # Not confirmed yet — must not tint the whole row before it earns it.
+    assert WeatherPanel._CHIP_ALARM_BG not in tentative_at_risk_html

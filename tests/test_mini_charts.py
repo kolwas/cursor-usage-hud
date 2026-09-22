@@ -66,8 +66,8 @@ def test_burn_timeline_icon_clamps_out_of_range_fractions_without_crashing():
     assert "data:image/png;base64," in tag
 
 
-def test_unconfident_exhaustion_dot_is_drawn_differently_from_a_confident_one():
-    """A tentative prediction is still plotted — never withheld — but its dot
+def test_unconfident_exhaustion_flag_is_drawn_differently_from_a_confident_one():
+    """A tentative prediction is still plotted — never withheld — but its flag
     must not look identical to a confident one, or it would read as a verdict."""
     mini_charts = _import_mini_charts()
     confident = mini_charts.burn_timeline_icon(0.3, 0.6, QColor("#ff8a80"), confident=True)
@@ -104,19 +104,24 @@ def test_hot_spike_badge_is_visually_distinct():
     assert calm != spiking
 
 
-def test_low_usage_dims_the_elapsed_fill():
-    """A gauge at 0-19% needs zero attention — its elapsed bar (which only
-    encodes cycle position, not usage) must not be just as bright as a
-    heavily-used gauge's, or a fine 0% reads as visually loud."""
+def test_elapsed_fill_is_dim_regardless_of_how_far_along_it_is():
+    """The elapsed segment is background context ("how far into the cycle"),
+    never the alarm signal — it must render in the same dim tone whether the
+    cycle is nearly over or barely started. Only the exhaustion flag carries
+    severity colour."""
     mini_charts = _import_mini_charts()
-    bright = mini_charts.burn_timeline_icon(0.8, None, QColor("#8ec8ff"), usage_pct=70.0)
-    dim = mini_charts.burn_timeline_icon(0.8, None, QColor("#8ec8ff"), usage_pct=0.0)
-    assert bright != dim
+    early = mini_charts.burn_timeline_icon(0.1, None, QColor("#8ec8ff"))
+    late = mini_charts.burn_timeline_icon(0.8, None, QColor("#8ec8ff"))
+    assert early != late  # different fill width, same styling — still renders distinctly
+    assert "data:image/png;base64," in early
+    assert "data:image/png;base64," in late
 
 
-def test_no_usage_pct_keeps_the_default_bright_fill():
-    """Backward-compatible default: omitting usage_pct must not silently dim."""
+def test_exhaustion_flag_present_only_when_a_projection_exists():
+    """No projection (``exhaust_frac=None``) must draw a plain fill with no
+    flag at all, distinct from a row that has one — the flag's absence is
+    itself the "nothing to worry about (yet)" signal."""
     mini_charts = _import_mini_charts()
-    default = mini_charts.burn_timeline_icon(0.8, None, QColor("#8ec8ff"))
-    bright = mini_charts.burn_timeline_icon(0.8, None, QColor("#8ec8ff"), usage_pct=70.0)
-    assert default == bright
+    no_flag = mini_charts.burn_timeline_icon(0.5, None, QColor("#ff8a80"))
+    with_flag = mini_charts.burn_timeline_icon(0.5, 0.6, QColor("#ff8a80"))
+    assert no_flag != with_flag

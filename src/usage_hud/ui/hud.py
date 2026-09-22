@@ -441,16 +441,17 @@ class WeatherPanel(QWidget):
         same split-column treatment as _reset_parts_html, so "podobny format
         z czasem do końca" (matching format for the time-to-exhaustion too):
         digits line up in their own columns instead of one "+13d"/"→9d"
-        string. The sign/arrow prefix and a tentative "?" both live on the
-        days cell, mirroring how format_chip_eta built the single string.
+        string. A tentative estimate gets a leading "~" (approximately) —
+        a trailing "?" glued straight onto "d" read like a stray typo more
+        than a hedge.
         """
         parts = chip_eta_parts(proj)
         if parts is None:
             return "", "", ""
         prefix, days, hours, minutes, sev = parts
         color = _ETA_COLOR.get(sev, "#8ec8ff")
-        mark = "?" if sev == "tentative" else ""
-        days_txt = f"{prefix}99d+{mark}" if days >= 99 else f"{prefix}{days}d{mark}"
+        mark = "~" if sev == "tentative" else ""
+        days_txt = f"{mark}{prefix}99d+" if days >= 99 else f"{mark}{prefix}{days}d"
         return (
             f'<span style="color:{color}; font-weight:600;">{days_txt}</span>',
             f'<span style="color:{color};">{hours}h</span>',
@@ -486,9 +487,11 @@ class WeatherPanel(QWidget):
         snap: ProviderSnapshot, metric: Metric, proj: BurnProjection | None
     ) -> str:
         """Tiny burn timeline image, always drawn: track = current cycle,
-        filled = elapsed so far (from the same cycle inference as the clock,
-        so it never needs burn-rate history to appear), dot = where the burn
-        rate projects exhaustion once there is a confident prediction.
+        dim fill = elapsed so far (from the same cycle inference as the
+        clock, so it never needs burn-rate history to appear), coloured
+        flag = where the burn rate projects exhaustion once there is a
+        prediction. See ``mini_charts.burn_timeline_icon`` for why a flag,
+        not a dot.
         """
         frac_remaining = reset_fraction_remaining(snap, metric, snap.fetched_at)
         elapsed_frac = None if frac_remaining is None else max(0.0, 1.0 - frac_remaining)
@@ -528,7 +531,6 @@ class WeatherPanel(QWidget):
             exhaust_frac,
             QColor("#ff3b3b") if rocketing else marker,
             confident=confident,
-            usage_pct=metric.resolved_percent(),
         )
 
     def _sparkline_html(
@@ -557,8 +559,17 @@ class WeatherPanel(QWidget):
     _CHIP_RIGHT_ALIGN = {2, 3, 4, 5, 7, 8, 9}
     _CHIP_TIGHT_PAD = {3, 4, 8, 9}  # hours/minutes sit close to their own days
 
+    # A whole-row wash for a gauge that needs attention right now — a rocketing
+    # spike or a confirmed (not tentative) risk of running out before reset.
+    # Column widths stay identical (nothing resizes, unlike the earlier
+    # attempt), but a tinted row is hard to miss scanning down a small chip,
+    # which a single small coloured dot on the timeline chart wasn't.
+    # #RRGGBBAA, not rgba(...) — Qt's rich-text CSS subset reliably parses
+    # the hex-alpha form; rgba() support is not guaranteed across versions.
+    _CHIP_ALARM_BG = "#ff3b3b29"
+
     @classmethod
-    def _chip_cell(cls, html: str, *, index: int) -> str:
+    def _chip_cell(cls, html: str, *, index: int, highlight: bool = False) -> str:
         align = " text-align:right;" if index in cls._CHIP_RIGHT_ALIGN else ""
         if index == 0:
             pad = "0"
@@ -566,11 +577,12 @@ class WeatherPanel(QWidget):
             pad = "3px"
         else:
             pad = "7px"
-        return f'<td style="padding:3px 0 0 {pad}; white-space:nowrap;{align}">{html}</td>'
+        bg = f" background-color:{cls._CHIP_ALARM_BG};" if highlight else ""
+        return f'<td style="padding:3px 0 0 {pad}; white-space:nowrap;{align}{bg}">{html}</td>'
 
-    def _chip_row(self, *cells: str) -> str:
+    def _chip_row(self, *cells: str, highlight: bool = False) -> str:
         return "<tr>" + "".join(
-            self._chip_cell(c, index=i) for i, c in enumerate(cells)
+            self._chip_cell(c, index=i, highlight=highlight) for i, c in enumerate(cells)
         ) + "</tr>"
 
     @staticmethod
@@ -644,6 +656,12 @@ class WeatherPanel(QWidget):
                 )
                 proj = proj_map.get((snap.provider_id, metric.key)) if multi else etas.get(snap.provider_id)
                 eta_days, eta_hours, eta_minutes = self._eta_parts_html(proj)
+                # A genuinely alarming row (confirmed on track to exhaust, or
+                # a real pace spike) gets its whole row tinted — colour alone
+                # on the small chart/ETA cells was too easy to miss at a
+                # glance; a tentative prediction does not tint, since it
+                # hasn't earned the verdict yet.
+                highlight = bool(proj and (proj.rocketing or (proj.will_exhaust and proj.confident)))
                 rows.append(
                     self._chip_row(
                         f'<span style="color:#8a93a6;">{label}</span>',
@@ -656,6 +674,7 @@ class WeatherPanel(QWidget):
                         eta_days,
                         eta_hours,
                         eta_minutes,
+                        highlight=highlight,
                     )
                 )
         if not rows:
