@@ -237,7 +237,13 @@ def infer_window_end(
         return None
 
     end = points[start_idx][0] + span
-    return end if end > now else None
+    if end <= now:
+        return None
+    # Hard invariant: a window can never have more than its own `span` left,
+    # no matter which sample got picked as the reset point (e.g. a tiny
+    # decrease from measurement noise, not a real reset, being mistaken for
+    # one). Cap rather than ever show an impossible ">5h left" on a 5h window.
+    return min(end, now + span)
 
 
 def snapshot_from_desktop_history(

@@ -16,22 +16,20 @@ from usage_hud.ui.formatters import (
 NOW = datetime(2026, 9, 15, 12, tzinfo=timezone.utc)
 
 
-def test_rolling_window_shows_hours_and_minutes():
-    assert format_reset_eta(NOW + timedelta(hours=2, minutes=10), NOW) == "2h10m"
-
-
-def test_short_window_shows_minutes():
-    assert format_reset_eta(NOW + timedelta(minutes=8), NOW) == "8m"
-
-
-def test_long_window_shows_days():
-    assert format_reset_eta(NOW + timedelta(days=3, hours=2), NOW) == "3d"
+def test_countdown_always_shows_days_hours_and_minutes_together():
+    """Same three-part structure for every gauge — a bare '6d' used to hide
+    the hours on a long window, and '2h14m' used to hide the days on one
+    that happened to be just under 24h; neither lined up with the other."""
+    assert format_reset_eta(NOW + timedelta(hours=2, minutes=10), NOW) == "0d 2h 10m"
+    assert format_reset_eta(NOW + timedelta(minutes=8), NOW) == "0d 0h 08m"
+    assert format_reset_eta(NOW + timedelta(days=3, hours=2), NOW) == "3d 2h 00m"
 
 
 def test_days_are_floored_not_rounded_up():
-    """A countdown must not claim 4d when 3 d 20 h remain."""
-    assert format_reset_eta(NOW + timedelta(days=3, hours=20), NOW) == "3d"
-    assert format_reset_eta(NOW + timedelta(hours=23, minutes=59), NOW) == "23h59m"
+    """A countdown must not claim 4d when 3 d 20 h remain — the hours are
+    now shown explicitly instead, so there's nothing left to round away."""
+    assert format_reset_eta(NOW + timedelta(days=3, hours=20), NOW) == "3d 20h 00m"
+    assert format_reset_eta(NOW + timedelta(hours=23, minutes=59), NOW) == "0d 23h 59m"
 
 
 def test_unknown_or_past_window():
@@ -141,7 +139,7 @@ def test_shared_cycle_gets_one_reset_countdown_not_one_per_gauge():
         ],
     )
     shared, per_metric = grouped_reset_etas(snap, snap.metrics, NOW)
-    assert shared == "25d"
+    assert shared == "25d 0h 00m"
     assert per_metric == {}
 
 
@@ -165,7 +163,7 @@ def test_rolling_windows_each_keep_their_own_countdown():
     )
     shared, per_metric = grouped_reset_etas(snap, snap.metrics, NOW)
     assert shared == ""
-    assert per_metric == {"five_hour": "3h14m", "seven_day": "6d"}
+    assert per_metric == {"five_hour": "0d 3h 14m", "seven_day": "6d 0h 00m"}
 
 
 def test_eta_severity_thresholds():

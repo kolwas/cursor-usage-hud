@@ -62,7 +62,12 @@ def format_renewal_offset(days: float | None) -> str | None:
 
 
 def format_reset_eta(cycle_end: datetime | None, now: datetime | None = None) -> str:
-    """Time until a quota window rolls — "2h10m" for rolling windows, "3d" above a day."""
+    """Time until a quota window rolls — always "Xd Yh Zm" together, the
+    same structure for every gauge whether its window is hour-scale (5h) or
+    day-scale (30d), so the countdown column lines up and compares cleanly
+    across rows instead of a bare "6d" hiding the hours or "2h14m" hiding
+    the days.
+    """
     if cycle_end is None:
         return ""
     now = now or datetime.now(timezone.utc)
@@ -73,13 +78,10 @@ def format_reset_eta(cycle_end: datetime | None, now: datetime | None = None) ->
     seconds = (cycle_end - now).total_seconds()
     if seconds <= 0:
         return "now"
-    if seconds >= 86400:
-        # Countdown, so floor: "3d" means at least three full days left.
-        return f"{int(seconds // 86400)}d"
-    hours, minutes = divmod(int(seconds // 60), 60)
-    if hours:
-        return f"{hours}h{minutes:02d}m"
-    return f"{minutes}m"
+    total_minutes = int(seconds // 60)
+    days, rem_minutes = divmod(total_minutes, 1440)
+    hours, minutes = divmod(rem_minutes, 60)
+    return f"{days}d {hours}h {minutes:02d}m"
 
 
 def grouped_reset_etas(
