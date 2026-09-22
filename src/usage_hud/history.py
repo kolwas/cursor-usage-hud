@@ -92,15 +92,21 @@ def _recent_spike(
 
 
 def _fmt_offset(days: float) -> str:
-    """Signed day offset vs renewal: −1d = one day before reset."""
-    rounded = int(round(days))
-    if rounded == 0:
+    """Signed offset vs renewal — see formatters.format_renewal_offset (same
+    logic, duplicated rather than imported: this module stays UI-agnostic).
+    Below a day this switches to h/m instead of collapsing a 5h window's
+    real margin down to an uninformative "0d" every time."""
+    sign = "-" if days < 0 else "+"
+    magnitude = abs(days)
+    if magnitude >= 99:
+        return f"{sign}99d+"
+    if magnitude >= 1.0:
+        return f"{sign}{int(round(magnitude)):d}d"
+    if magnitude < 1.0 / 1440:
         return "0d"
-    if rounded > 99:
-        return "+99d+"
-    if rounded < -99:
-        return "-99d+"
-    return f"{rounded:+d}d"
+    seconds = magnitude * 86400.0
+    hours, minutes = divmod(int(seconds // 60), 60)
+    return f"{sign}{hours}h{minutes:02d}m" if hours else f"{sign}{minutes}m"
 
 
 def _parse_ts(value: str) -> datetime:

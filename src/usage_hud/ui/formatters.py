@@ -40,18 +40,25 @@ def chip_metric_tag(metric: Metric) -> str:
 
 
 def format_renewal_offset(days: float | None) -> str | None:
-    """−1d = exhaust one day before renewal; +2d = trend lasts past reset."""
+    """Signed offset vs renewal: −1d = exhaust a day before reset; +2d =
+    trend lasts two days past it. Below a day this switches to h/m —
+    rounding a 5h Claude window's real few-hour margin down to whole days
+    always landed on the same uninformative "0d" no matter which way (or
+    how far) it actually leaned.
+    """
     if days is None:
         return None
-    rounded = int(round(days))
-    if rounded == 0:
+    sign = "-" if days < 0 else "+"
+    magnitude = abs(days)
+    if magnitude >= 99:
+        return f"{sign}99d+"
+    if magnitude >= 1.0:
+        return f"{sign}{int(round(magnitude)):d}d"
+    if magnitude < 1.0 / 1440:  # under a minute — call it "at renewal"
         return "0d"
-    # Near-zero burn yields huge +offsets — keep the chip readable.
-    if rounded > 99:
-        return "+99d+"
-    if rounded < -99:
-        return "-99d+"
-    return f"{rounded:+d}d"
+    seconds = magnitude * 86400.0
+    hours, minutes = divmod(int(seconds // 60), 60)
+    return f"{sign}{hours}h{minutes:02d}m" if hours else f"{sign}{minutes}m"
 
 
 def format_reset_eta(cycle_end: datetime | None, now: datetime | None = None) -> str:

@@ -1,4 +1,10 @@
-"""Rocketing (short-window spike) gauges get a visibly wider timeline chart."""
+"""Alarm states (rocketing spike, confirmed exhaustion risk) are colour
+signals on the timeline chart — never a different size. Widening just the
+alarming row used to put different-length bars inside one shared table
+column (Qt sizes a column to its widest cell), which read as stray/uneven
+fragments rather than something that stood out — reverted to a uniform
+width, alarm communicated by colour alone.
+"""
 
 import pytest
 
@@ -42,6 +48,7 @@ def _proj(**overrides) -> BurnProjection:
         days_left=25.0,
         will_exhaust=False,
         days_elapsed=5.0,
+        days_to_exhaust=35.0,
         renewal_offset_days=10.0,
         confident=True,
         rocketing=False,
@@ -50,38 +57,34 @@ def _proj(**overrides) -> BurnProjection:
     return BurnProjection(**base)
 
 
-def test_rocketing_gauge_gets_a_wider_timeline_chart():
+def _width(tag: str) -> str | None:
+    import re
+
+    m = re.search(r'width="(\d+)"', tag)
+    return m.group(1) if m else None
+
+
+def test_every_state_renders_the_same_width():
+    from usage_hud.ui.hud import WeatherPanel
+
+    snap, metric = _snap_and_metric()
+    calm = WeatherPanel._timeline_chart(snap, metric, _proj())
+    spiking = WeatherPanel._timeline_chart(snap, metric, _proj(rocketing=True))
+    at_risk = WeatherPanel._timeline_chart(
+        snap, metric, _proj(will_exhaust=True, confident=True)
+    )
+
+    widths = {_width(calm), _width(spiking), _width(at_risk)}
+    assert len(widths) == 1
+    assert None not in widths
+
+
+def test_rocketing_is_a_distinct_colour_not_a_size_change():
     from usage_hud.ui.hud import WeatherPanel
 
     snap, metric = _snap_and_metric()
     calm = WeatherPanel._timeline_chart(snap, metric, _proj(rocketing=False))
     spiking = WeatherPanel._timeline_chart(snap, metric, _proj(rocketing=True))
 
-    assert 'width="38"' in calm
-    assert 'width="70"' in spiking
-    assert calm != spiking
-
-
-def test_confirmed_exhaustion_risk_also_gets_the_wider_chart():
-    from usage_hud.ui.hud import WeatherPanel
-
-    snap, metric = _snap_and_metric()
-    safe = WeatherPanel._timeline_chart(snap, metric, _proj(will_exhaust=False))
-    at_risk = WeatherPanel._timeline_chart(
-        snap, metric, _proj(will_exhaust=True, confident=True)
-    )
-
-    assert 'width="38"' in safe
-    assert 'width="70"' in at_risk
-
-
-def test_tentative_exhaustion_risk_stays_normal_width():
-    """An early/unconfident 'will exhaust' guess is still noisy — widening
-    it would cry wolf before the prediction has earned that attention."""
-    from usage_hud.ui.hud import WeatherPanel
-
-    snap, metric = _snap_and_metric()
-    tentative_risk = WeatherPanel._timeline_chart(
-        snap, metric, _proj(will_exhaust=True, confident=False)
-    )
-    assert 'width="38"' in tentative_risk
+    assert _width(calm) == _width(spiking)
+    assert calm != spiking  # still visually distinct — via colour
