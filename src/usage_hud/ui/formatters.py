@@ -61,15 +61,16 @@ def format_renewal_offset(days: float | None) -> str | None:
     return f"{sign}{hours}h{minutes:02d}m" if hours else f"{sign}{minutes}m"
 
 
-def format_reset_eta(cycle_end: datetime | None, now: datetime | None = None) -> str:
-    """Time until a quota window rolls — always "Xd Yh Zm" together, the
-    same structure for every gauge whether its window is hour-scale (5h) or
-    day-scale (30d), so the countdown column lines up and compares cleanly
-    across rows instead of a bare "6d" hiding the hours or "2h14m" hiding
-    the days.
+def reset_eta_parts(
+    cycle_end: datetime | None, now: datetime | None = None
+) -> tuple[int, int, int] | None:
+    """(days, hours, minutes) until a quota window rolls, or None when
+    unknown or already past — the raw components behind format_reset_eta,
+    for callers (the chip table) that put each unit in its own column
+    instead of one combined string, so the digits line up across rows.
     """
     if cycle_end is None:
-        return ""
+        return None
     now = now or datetime.now(timezone.utc)
     if cycle_end.tzinfo is None:
         cycle_end = cycle_end.replace(tzinfo=timezone.utc)
@@ -77,10 +78,25 @@ def format_reset_eta(cycle_end: datetime | None, now: datetime | None = None) ->
         now = now.replace(tzinfo=timezone.utc)
     seconds = (cycle_end - now).total_seconds()
     if seconds <= 0:
-        return "now"
+        return None
     total_minutes = int(seconds // 60)
     days, rem_minutes = divmod(total_minutes, 1440)
     hours, minutes = divmod(rem_minutes, 60)
+    return days, hours, minutes
+
+
+def format_reset_eta(cycle_end: datetime | None, now: datetime | None = None) -> str:
+    """Time until a quota window rolls — always "Xd Yh Zm" together, the
+    same structure for every gauge whether its window is hour-scale (5h) or
+    day-scale (30d), so the countdown lines up and compares cleanly across
+    rows instead of a bare "6d" hiding the hours or "2h14m" hiding the days.
+    """
+    if cycle_end is None:
+        return ""
+    parts = reset_eta_parts(cycle_end, now)
+    if parts is None:
+        return "now"
+    days, hours, minutes = parts
     return f"{days}d {hours}h {minutes:02d}m"
 
 
@@ -122,6 +138,42 @@ def eta_severity(renewal_offset_days: float) -> str:
     if renewal_offset_days <= 3:
         return "warn"
     return "ok"
+
+
+def _magnitude_to_dhm(magnitude_days: float) -> tuple[int, int, int]:
+    magnitude_days = max(0.0, min(magnitude_days, 99.0))
+    total_minutes = int(round(magnitude_days * 1440))
+    days, rem_minutes = divmod(total_minutes, 1440)
+    hours, minutes = divmod(rem_minutes, 60)
+    return days, hours, minutes
+
+
+def chip_eta_parts(proj: BurnProjection | None) -> tuple[str, int, int, int, str] | None:
+    """(prefix, days, hours, minutes, severity) for the exhaustion/renewal
+    badge — the same split-column treatment as reset_eta_parts, instead of
+    one combined "+13d"/"-15d"/"→9d" string, so its digits line up in their
+    own table columns too.
+
+    prefix is "+"/"-" for a signed days-vs-renewal offset, or "→" for the
+    unsigned "exhausts in" horizon shown when there is no renewal date to
+    compare against. severity is bad|warn|ok|tentative, as format_chip_eta.
+    """
+    if proj is None:
+        return None
+    if proj.renewal_offset_days is not None:
+        offset = proj.renewal_offset_days
+        if abs(offset) >= 99:
+            return ("+" if offset >= 0 else "-"), 99, 0, 0, (
+                "tentative" if not proj.confident else eta_severity(offset)
+            )
+        prefix = "-" if offset < 0 else "+"
+        days, hours, minutes = _magnitude_to_dhm(abs(offset))
+        sev = "tentative" if not proj.confident else eta_severity(offset)
+        return prefix, days, hours, minutes, sev
+    if proj.days_to_exhaust is not None and proj.avg_daily > 0:
+        days, hours, minutes = _magnitude_to_dhm(proj.days_to_exhaust)
+        return "→", days, hours, minutes, "tentative"
+    return None
 
 
 def format_chip_eta(proj: BurnProjection | None) -> tuple[str, str] | None:

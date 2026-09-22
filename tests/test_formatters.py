@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from usage_hud.models import Alert, AlertLevel, BurnProjection, Metric, ProviderSnapshot, utc_now
 from usage_hud.ui.formatters import (
+    chip_eta_parts,
     chip_metric_tag,
     chip_metrics,
     eta_severity,
@@ -10,6 +11,7 @@ from usage_hud.ui.formatters import (
     format_reset_eta,
     grouped_reset_etas,
     icon_severity,
+    reset_eta_parts,
     reset_fraction_remaining,
 )
 
@@ -263,6 +265,47 @@ def test_unknown_reset_time_still_shows_a_raw_exhaustion_horizon():
 
 def test_no_burn_rate_at_all_still_means_no_badge():
     assert format_chip_eta(_proj(renewal_offset_days=None, days_to_exhaust=None)) is None
+
+
+def test_reset_eta_parts_matches_format_reset_eta():
+    cycle_end = NOW + timedelta(days=6, hours=2, minutes=27)
+    assert reset_eta_parts(cycle_end, NOW) == (6, 2, 27)
+    assert format_reset_eta(cycle_end, NOW) == "6d 2h 27m"
+
+
+def test_reset_eta_parts_is_none_when_unknown_or_past():
+    assert reset_eta_parts(None, NOW) is None
+    assert reset_eta_parts(NOW - timedelta(minutes=1), NOW) is None
+
+
+def test_chip_eta_parts_confident_offset():
+    prefix, days, hours, minutes, sev = chip_eta_parts(
+        _proj(renewal_offset_days=-15.5, confident=True)
+    )
+    assert (prefix, days, sev) == ("-", 15, "bad")
+    assert (hours, minutes) == (12, 0)
+
+
+def test_chip_eta_parts_tentative_offset_still_returns_the_number():
+    prefix, days, hours, minutes, sev = chip_eta_parts(
+        _proj(renewal_offset_days=2.0, confident=False)
+    )
+    assert prefix == "+"
+    assert sev == "tentative"
+
+
+def test_chip_eta_parts_arrow_fallback():
+    prefix, days, hours, minutes, sev = chip_eta_parts(
+        _proj(renewal_offset_days=None, days_to_exhaust=2.5, avg_daily=6.9)
+    )
+    assert prefix == "→"
+    assert days == 2
+    assert sev == "tentative"
+
+
+def test_chip_eta_parts_none_when_no_signal():
+    assert chip_eta_parts(_proj(renewal_offset_days=None, days_to_exhaust=None)) is None
+    assert chip_eta_parts(None) is None
     assert format_chip_eta(_proj(renewal_offset_days=None, days_to_exhaust=2.0, avg_daily=0.0)) is None
 
 

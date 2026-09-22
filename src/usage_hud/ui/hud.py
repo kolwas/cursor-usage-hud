@@ -23,15 +23,16 @@ from usage_hud.ui import mini_charts
 from usage_hud.ui.display import idle_screen, next_screen_after, screen_under_cursor
 from usage_hud.ui.formatters import (
     badge_icon,
+    chip_eta_parts,
     chip_metric_tag,
     chip_metrics,
     compact_title,
     eta_severity,
     format_chip_eta,
     format_renewal_offset,
-    format_reset_eta,
     grouped_reset_etas,
     primary_eta_projection,
+    reset_eta_parts,
     reset_fraction_remaining,
 )
 
@@ -410,7 +411,13 @@ class WeatherPanel(QWidget):
             # number of gauges shown instead of staying fixed at one line.
             chip_hint = self._chip.sizeHint()
             self.setFixedHeight(max(40, min(220, chip_hint.height() + 16)))
-            self.setFixedWidth(max(220, min(420, chip_hint.width() + 36)))
+            # The table grew a lot wider once the reset countdown and the
+            # ETA badge each split into separate days/hours/minutes columns
+            # (10 columns total) — the old 420px cap was clipping them right
+            # off the edge, invisibly. Let it size to its real content
+            # (still with a sane ceiling so one long provider title can't
+            # blow the chip up arbitrarily).
+            self.setFixedWidth(max(220, min(720, chip_hint.width() + 36)))
         else:
             self.setMinimumHeight(0)
             self.setMaximumHeight(16777215)
@@ -427,6 +434,28 @@ class WeatherPanel(QWidget):
         label, sev = chip_eta
         color = _ETA_COLOR.get(sev, "#8ec8ff")
         return f' <span style="color:{color}; font-weight:600;">{label}</span>'
+
+    @staticmethod
+    def _eta_parts_html(proj: BurnProjection | None) -> tuple[str, str, str]:
+        """(days, hours, minutes) cells for the exhaustion/renewal badge —
+        same split-column treatment as _reset_parts_html, so "podobny format
+        z czasem do końca" (matching format for the time-to-exhaustion too):
+        digits line up in their own columns instead of one "+13d"/"→9d"
+        string. The sign/arrow prefix and a tentative "?" both live on the
+        days cell, mirroring how format_chip_eta built the single string.
+        """
+        parts = chip_eta_parts(proj)
+        if parts is None:
+            return "", "", ""
+        prefix, days, hours, minutes, sev = parts
+        color = _ETA_COLOR.get(sev, "#8ec8ff")
+        mark = "?" if sev == "tentative" else ""
+        days_txt = f"{prefix}99d+{mark}" if days >= 99 else f"{prefix}{days}d{mark}"
+        return (
+            f'<span style="color:{color}; font-weight:600;">{days_txt}</span>',
+            f'<span style="color:{color};">{hours}h</span>',
+            f'<span style="color:{color};">{minutes:02d}m</span>',
+        )
 
     @staticmethod
     def _clock_icon_only(snap: ProviderSnapshot, metric: Metric) -> str:
@@ -517,21 +546,50 @@ class WeatherPanel(QWidget):
         hot = bool(proj and proj.hot)
         return mini_charts.sparkline_icon(values, color, hot=hot)
 
-    # Chip table columns: Label | Clock | Reset time | Percent | Timeline | ETA.
-    _CHIP_COLS = 6
+    # Chip table columns: Label | Clock | Days | Hours | Minutes | Percent |
+    # Timeline | ETA-Days | ETA-Hours | ETA-Minutes. Every days/hours/minutes
+    # trio is three separate columns (not one "18d 21h 29m" or "+13d 2h 14m"
+    # string) so each unit's digits line up down the table — a bare "18d"
+    # next to "0d" doesn't visually align, three right-aligned numeric
+    # columns do. The ETA badge gets the same treatment as the reset
+    # countdown for the same reason.
+    _CHIP_COLS = 10
+    _CHIP_RIGHT_ALIGN = {2, 3, 4, 5, 7, 8, 9}
+    _CHIP_TIGHT_PAD = {3, 4, 8, 9}  # hours/minutes sit close to their own days
 
-    @staticmethod
-    def _chip_cell(html: str, *, first: bool = False, right: bool = False) -> str:
-        align = " text-align:right;" if right else ""
-        pad = "0" if first else "7px"
-        return (
-            f'<td style="padding:3px 0 0 {pad}; white-space:nowrap;{align}">{html}</td>'
-        )
+    @classmethod
+    def _chip_cell(cls, html: str, *, index: int) -> str:
+        align = " text-align:right;" if index in cls._CHIP_RIGHT_ALIGN else ""
+        if index == 0:
+            pad = "0"
+        elif index in cls._CHIP_TIGHT_PAD:
+            pad = "3px"
+        else:
+            pad = "7px"
+        return f'<td style="padding:3px 0 0 {pad}; white-space:nowrap;{align}">{html}</td>'
 
     def _chip_row(self, *cells: str) -> str:
         return "<tr>" + "".join(
-            self._chip_cell(c, first=(i == 0), right=(i == 3)) for i, c in enumerate(cells)
+            self._chip_cell(c, index=i) for i, c in enumerate(cells)
         ) + "</tr>"
+
+    @staticmethod
+    def _reset_parts_html(
+        snap: ProviderSnapshot, metric: Metric
+    ) -> tuple[str, str, str]:
+        """(days, hours, minutes) cells for the reset countdown — "" in all
+        three when the reset time is unknown, so the row still has exactly
+        _CHIP_COLS cells."""
+        parts = reset_eta_parts(metric.cycle_end or snap.cycle_end, snap.fetched_at)
+        if parts is None:
+            return "", "", ""
+        days, hours, minutes = parts
+        muted = "color:#6f7686;"
+        return (
+            f'<span style="{muted}">{days}d</span>',
+            f'<span style="{muted}">{hours}h</span>',
+            f'<span style="{muted}">{minutes:02d}m</span>',
+        )
 
     def _chip_html(self) -> str:
         # One table row per gauge, in fixed columns — cramming every provider
@@ -578,21 +636,26 @@ class WeatherPanel(QWidget):
                 # badge — the one that matters (e.g. API) must not hide
                 # behind another gauge's prediction.
                 label = f"{tag} {chip_metric_tag(metric)}" if multi else tag
-                own_reset = format_reset_eta(metric.cycle_end or snap.cycle_end, snap.fetched_at)
+                days_html, hours_html, minutes_html = self._reset_parts_html(snap, metric)
                 pct_html = (
                     f'<span style="color:{color}; font-weight:700;">{pct:.0f}%</span>'
                     if pct is not None
                     else '<span style="color:#5a6272;">—</span>'
                 )
                 proj = proj_map.get((snap.provider_id, metric.key)) if multi else etas.get(snap.provider_id)
+                eta_days, eta_hours, eta_minutes = self._eta_parts_html(proj)
                 rows.append(
                     self._chip_row(
                         f'<span style="color:#8a93a6;">{label}</span>',
                         self._clock_icon_only(snap, metric),
-                        f'<span style="color:#6f7686;">{own_reset}</span>',
+                        days_html,
+                        hours_html,
+                        minutes_html,
                         pct_html,
                         self._timeline_chart(snap, metric, proj),
-                        self._eta_html(format_chip_eta(proj)),
+                        eta_days,
+                        eta_hours,
+                        eta_minutes,
                     )
                 )
         if not rows:
