@@ -39,6 +39,23 @@ def _proj(store: HistoryStore, snap: ProviderSnapshot, key: str = "seven_day"):
     return next(p for p in projs if p.metric_key == key)
 
 
+def _claude_like_snap(*, now: datetime, cycle_end: datetime, used: float) -> ProviderSnapshot:
+    """No real cycle_start anywhere (snap or metric) — mirrors Claude, which
+    never reports one, forcing the percent-based backward inference."""
+    return ProviderSnapshot(
+        provider_id="anthropic",
+        title="Claude",
+        ok=True,
+        fetched_at=now,
+        metrics=[
+            Metric(
+                key="seven_day", label="7d", used=used, limit=100.0, unit="%",
+                percent_used=used, cycle_end=cycle_end,
+            )
+        ],
+    )
+
+
 def test_fresh_window_is_still_predicted_but_marked_tentative(tmp_path):
     """2% used, 1h into a fresh 7-day window: the noisy extrapolated rate
     (the false 'projected overrun' seen with the real Claude Desktop log)
@@ -65,6 +82,37 @@ def test_same_rate_is_trusted_once_the_window_has_run_a_while(tmp_path):
     assert proj.confident is True
     assert proj.renewal_offset_days is not None
     assert "(early estimate)" not in proj.note
+
+
+def test_real_history_overrides_the_tautological_cycle_pace_for_an_inferred_start(tmp_path):
+    """Regression: when no provider reports a real cycle_start (Claude never
+    does), the backward-inferred one is built FROM percent_used and
+    time-to-reset assuming a constant rate — so a "cycle pace" average
+    computed from that same inferred start just reconstructs the assumption
+    that produced it. renewal_offset comes out at ~0 ("exhaust right at
+    reset") for EVERY snapshot, regardless of the real trend, because it is
+    algebraically forced there, not because that's actually true.
+
+    A real, slow, steadily-observed history (well past the 6h floor) must
+    override that tautology once available, even though the tautological
+    figure is numerically much larger.
+    """
+    store = HistoryStore(tmp_path / "history.json")
+    cycle_end = NOW + timedelta(hours=148)  # ~6.9 days left in a 7-day window
+
+    # A slow, real climb recorded over the last 20 hours: ~0.2%/hour.
+    store.record([_claude_like_snap(now=NOW - timedelta(hours=20), cycle_end=cycle_end + timedelta(hours=20), used=1.0)])
+    store.record([_claude_like_snap(now=NOW - timedelta(hours=10), cycle_end=cycle_end + timedelta(hours=10), used=3.0)])
+    snap = _claude_like_snap(now=NOW, cycle_end=cycle_end, used=5.0)
+    store.record([snap])
+
+    proj = _proj(store, snap)
+
+    # The tautological cycle-pace for these numbers would be ~15%/day and
+    # force renewal_offset to ~0 — the real observed pace is close to 5%/day.
+    assert proj.avg_daily < 10.0
+    assert proj.renewal_offset_days is not None
+    assert abs(proj.renewal_offset_days) > 1.0  # not the ~0 tautology artifact
 
 
 def test_short_rolling_window_gets_a_proportionally_short_warmup(tmp_path):

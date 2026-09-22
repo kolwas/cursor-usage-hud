@@ -60,3 +60,28 @@ def test_rocketing_gauge_gets_a_wider_timeline_chart():
     assert 'width="38"' in calm
     assert 'width="70"' in spiking
     assert calm != spiking
+
+
+def test_confirmed_exhaustion_risk_also_gets_the_wider_chart():
+    from usage_hud.ui.hud import WeatherPanel
+
+    snap, metric = _snap_and_metric()
+    safe = WeatherPanel._timeline_chart(snap, metric, _proj(will_exhaust=False))
+    at_risk = WeatherPanel._timeline_chart(
+        snap, metric, _proj(will_exhaust=True, confident=True)
+    )
+
+    assert 'width="38"' in safe
+    assert 'width="70"' in at_risk
+
+
+def test_tentative_exhaustion_risk_stays_normal_width():
+    """An early/unconfident 'will exhaust' guess is still noisy — widening
+    it would cry wolf before the prediction has earned that attention."""
+    from usage_hud.ui.hud import WeatherPanel
+
+    snap, metric = _snap_and_metric()
+    tentative_risk = WeatherPanel._timeline_chart(
+        snap, metric, _proj(will_exhaust=True, confident=False)
+    )
+    assert 'width="38"' in tentative_risk

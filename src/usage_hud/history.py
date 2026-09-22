@@ -134,14 +134,22 @@ def _metric_window(
     snap: ProviderSnapshot,
     metric: Metric,
     now: datetime,
-) -> tuple[datetime | None, datetime | None, float | None]:
-    """Resolve cycle_start/end/days_left for one gauge (metric overrides snap)."""
+) -> tuple[datetime | None, datetime | None, float | None, bool]:
+    """Resolve cycle_start/end/days_left for one gauge (metric overrides snap).
+
+    The 4th value says whether cycle_start is REAL (Cursor's actual
+    billingCycleStart) or had to be back-inferred from percent-used + time-
+    to-reset (every provider that, like Claude, never reports a start at
+    all). That distinction matters upstream: a "cycle pace" built on an
+    inferred start reconstructs the very constant-rate assumption that
+    produced it, which is not an independent signal.
+    """
     cycle_end = metric.cycle_end or snap.cycle_end
-    cycle_start = metric.cycle_start or snap.cycle_start
+    explicit_start = metric.cycle_start or snap.cycle_start
     pct = metric.resolved_percent()
     cycle_start = infer_cycle_start(
         cycle_end=cycle_end,
-        cycle_start=cycle_start,
+        cycle_start=explicit_start,
         percent_used=pct,
         now=now,
     )
@@ -151,7 +159,7 @@ def _metric_window(
             0.0,
             (cycle_end.astimezone(timezone.utc) - now).total_seconds() / 86400.0,
         )
-    return cycle_start, cycle_end, days_left
+    return cycle_start, cycle_end, days_left, explicit_start is not None
 
 
 class HistoryStore:
@@ -262,7 +270,9 @@ class HistoryStore:
                     remaining = rem if rem is not None else 0.0
                     unit_is_pct = False
 
-                cycle_start, cycle_end, days_left = _metric_window(snap, metric, now)
+                cycle_start, cycle_end, days_left, cycle_start_is_real = _metric_window(
+                    snap, metric, now
+                )
 
                 elapsed_since_start: float | None = None
                 if cycle_start is not None:
@@ -313,7 +323,16 @@ class HistoryStore:
                     delta = max(0.0, v1 - v0)
                     if elapsed_days >= _MIN_ELAPSED_DAYS:
                         hist_avg = delta / elapsed_days
-                        if hist_avg > avg_daily:
+                        # A cycle-pace built on a back-inferred start (no
+                        # provider gives Claude a real one) algebraically
+                        # reconstructs the constant-rate assumption that
+                        # produced that start — it can never disagree with
+                        # "exactly on pace", which is why the badge always
+                        # read "0d". Real observed history always overrides
+                        # it once available; a REAL cycle_start (Cursor's
+                        # actual billing date) is an independent number, so
+                        # there only the larger (more cautious) of the two wins.
+                        if not cycle_start_is_real or hist_avg > avg_daily:
                             avg_daily = hist_avg
                             note_source = "history"
 

@@ -494,16 +494,19 @@ class WeatherPanel(QWidget):
             )
 
         rocketing = bool(proj and proj.rocketing)
+        # A confirmed (not tentative — an early-estimate "at risk" is still
+        # noisy) risk of running out before the reset gets the same wider
+        # treatment as a momentary spike, so either kind of trouble stands
+        # out before anyone reads the note text — but keeps its own
+        # severity color instead of the spike's forced alarm red.
+        at_risk = bool(proj and proj.will_exhaust and proj.confident)
         return mini_charts.burn_timeline_icon(
             elapsed_frac,
             exhaust_frac,
             QColor("#ff3b3b") if rocketing else marker,
             confident=confident,
             usage_pct=metric.resolved_percent(),
-            # A short-window spike gets a visibly wider chart than a normal
-            # row — the row itself stands out before anyone even reads the
-            # note text.
-            width=_ROCKET_CHART_WIDTH if rocketing else 38,
+            width=_ROCKET_CHART_WIDTH if (rocketing or at_risk) else 38,
         )
 
     def _sparkline_html(
