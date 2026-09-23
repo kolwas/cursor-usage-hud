@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import shutil
+
 from usage_hud.config import Settings
 from usage_hud.providers.anthropic import AnthropicProvider, claude_present_locally
 from usage_hud.providers.base import Provider
 from usage_hud.providers.cloud import CloudStubProvider
 from usage_hud.providers.copilot import CopilotProvider
 from usage_hud.providers.cursor import CursorProvider
+from usage_hud.providers.github import GitHubProvider
 from usage_hud.providers.openai_chatgpt import OpenAIProvider
 from usage_hud.providers.opencode_auth import (
     antigravity_accounts_path,
@@ -55,6 +58,12 @@ def discover_providers(settings: Settings | None = None) -> list[Provider]:
     if settings.enable_cloud_stub or antigravity_accounts_path().is_file():
         if settings.enable_cloud_stub and prefs.is_enabled("cloud"):
             candidates.append(CloudStubProvider())
+
+    # GitHub Actions/storage billing needs an explicit token (Settings dialog
+    # or GITHUB_TOKEN) or a `gh` CLI session — unlike the other providers,
+    # there is no local file to auto-detect a subscription from.
+    if prefs.is_enabled("github") and (settings.github_token or shutil.which("gh")):
+        candidates.append(GitHubProvider(settings))
 
     return candidates
 

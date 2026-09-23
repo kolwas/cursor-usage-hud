@@ -15,6 +15,7 @@ from usage_hud.providers.registry import discover_providers, visible_snapshots
 from usage_hud.providers_pref import ProviderPrefs
 from usage_hud.snooze import SnoozeStore
 from usage_hud.ui.hud import WeatherPanel
+from usage_hud.ui.settings_dialog import SettingsDialog
 from usage_hud.ui.tray import TrayController
 
 
@@ -42,6 +43,7 @@ class UsageHudApp:
             on_quit=self.quit,
             prefs=self.prefs,
             chip_visible=not self._snooze.active,
+            on_open_settings=self.open_settings,
         )
 
         self._timer = QTimer()
@@ -92,6 +94,26 @@ class UsageHudApp:
 
     def toggle_provider(self, provider_id: str, enabled: bool) -> None:
         self.prefs.set_enabled(provider_id, enabled)
+        self.refresh()
+
+    def open_settings(self) -> None:
+        dialog = SettingsDialog(self.settings, parent=self.panel)
+        if not dialog.exec():
+            return
+        # Reload from disk: the dialog wrote state_dir/settings.json (general
+        # knobs, GitHub token/login) and its own ProviderPrefs instance wrote
+        # providers.json — self.prefs is a separate in-memory copy of that
+        # same file and needs an explicit re-read to see the new toggles.
+        self.settings = Settings.load()
+        self.prefs.load()
+        self._timer.setInterval(self.settings.refresh_seconds * 1000)
+        self.panel.setWindowOpacity(max(0.85, self.settings.opacity))
+        if self.settings.ui_mode == "chip" and not self._snooze.active:
+            self.panel.show()
+            self.panel.collapse()
+            self.panel.dock_to_taskbar(force=True)
+        elif self.settings.ui_mode != "chip":
+            self.panel.hide()
         self.refresh()
 
     def _tick_ui(self) -> None:

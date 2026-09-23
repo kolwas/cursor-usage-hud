@@ -75,6 +75,7 @@ class TrayController:
         on_quit: Callable[[], None],
         prefs: ProviderPrefs,
         chip_visible: bool = True,
+        on_open_settings: Callable[[], None] | None = None,
     ) -> None:
         self._on_refresh = on_refresh
         self._on_show_chip = on_show_chip
@@ -82,6 +83,7 @@ class TrayController:
         self._on_open_details = on_open_details
         self._on_toggle_provider = on_toggle_provider
         self._on_quit = on_quit
+        self._on_open_settings = on_open_settings
         self._prefs = prefs
         self._chip_visible = chip_visible
         self._snooze_label = ""
@@ -187,9 +189,13 @@ class TrayController:
 
         act_refresh = QAction("Refresh")
         act_refresh.triggered.connect(self._on_refresh)
+        self._menu.addAction(act_refresh)
+        if self._on_open_settings is not None:
+            act_settings = QAction("Settings…")
+            act_settings.triggered.connect(self._on_open_settings)
+            self._menu.addAction(act_settings)
         act_quit = QAction("Quit")
         act_quit.triggered.connect(self._on_quit)
-        self._menu.addAction(act_refresh)
         self._menu.addSeparator()
         self._menu.addAction(act_quit)
 
