@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
-
 from usage_hud.config import Settings
 from usage_hud.providers.anthropic import AnthropicProvider, claude_present_locally
 from usage_hud.providers.base import Provider
@@ -59,10 +57,13 @@ def discover_providers(settings: Settings | None = None) -> list[Provider]:
         if settings.enable_cloud_stub and prefs.is_enabled("cloud"):
             candidates.append(CloudStubProvider())
 
-    # GitHub Actions/storage billing needs an explicit token (Settings dialog
-    # or GITHUB_TOKEN) or a `gh` CLI session — unlike the other providers,
-    # there is no local file to auto-detect a subscription from.
-    if prefs.is_enabled("github") and (settings.github_token or shutil.which("gh")):
+    # GitHub Actions/storage billing has no local file to auto-detect a
+    # subscription from the way the other providers do, and it isn't an AI
+    # service at all — it must only appear once someone has explicitly typed
+    # a token into the Settings dialog (or set GITHUB_TOKEN themselves), not
+    # merely because a `gh` CLI session happens to exist on this machine.
+    # Ambient `gh` auto-detection surprised a user who never configured it.
+    if prefs.is_enabled("github") and settings.github_token:
         candidates.append(GitHubProvider(settings))
 
     return candidates

@@ -58,7 +58,7 @@ def _detect_status(provider_id: str, auth: dict) -> tuple[bool, str]:
     if provider_id == "cloud":
         return False, "experimental stub — off unless enabled below"
     if provider_id == "github":
-        return False, "needs a token below, or a `gh auth login` session"
+        return False, "off until a token is entered below"
     return False, ""
 
 
@@ -169,7 +169,7 @@ class SettingsDialog(QDialog):
                 self._github_token = QLineEdit(self._settings.github_token)
                 self._github_token.setEchoMode(QLineEdit.EchoMode.Password)
                 self._github_token.setPlaceholderText(
-                    "ghp_… (actions/packages scope) — blank uses `gh` CLI if available"
+                    "ghp_… (actions/packages scope) — left blank, this service stays off"
                 )
                 form.addRow("Token", self._github_token)
                 self._github_login = QLineEdit(self._settings.github_login)
