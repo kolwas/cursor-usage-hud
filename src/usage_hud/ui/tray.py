@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
@@ -19,6 +19,9 @@ from usage_hud.ui.formatters import (
     icon_severity,
     primary_eta_projection,
 )
+from usage_hud.ui.raven_glyph import paint_raven_solid
+
+_TRAY_PLATE = QColor(35, 42, 53)  # same dark plate as the app/taskbar icon
 
 
 def severity_color(snapshots: list[ProviderSnapshot], alerts: list[Alert]) -> QColor:
@@ -27,26 +30,49 @@ def severity_color(snapshots: list[ProviderSnapshot], alerts: list[Alert]) -> QC
 
 
 def make_status_icon(snapshots: list[ProviderSnapshot], alerts: list[Alert]) -> QIcon:
-    """Plain colored tray icon: color says fine/watch/critical, a small "!"
-    only when something has actually crossed an alert threshold — no raw
-    percent number (a blanket "highest % anywhere" badge used to show e.g.
-    Cursor's API-models 70% on the icon with no real alert behind it)."""
+    """The raven, tinted by status: color says fine/watch/critical (same
+    convention as before — no raw percent number, a blanket "highest %
+    anywhere" badge used to show e.g. Cursor's API-models 70% with no real
+    alert behind it), a small "!" badge only when something has actually
+    crossed an alert threshold.
+
+    Used to be a plain colored rounded square with no bird at all — the
+    live tray icon (the one actually visible all the time) and the
+    taskbar/app icon were unrelated glyphs. Solid silhouette, not the
+    stroked outline the taskbar icon uses above 24px: the tray is always
+    rendered at 16-24px regardless of the source pixmap's size, and a
+    stroke that thin smears into a smudge — see raven_glyph.SOLID_MAX_SIZE.
+    """
     color, urgent = icon_severity(snapshots, alerts)
-    pix = QPixmap(64, 64)
+    size = 64
+    pix = QPixmap(size, size)
     pix.fill(QColor(0, 0, 0, 0))
     painter = QPainter(pix)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setBrush(color)
-    painter.setPen(QColor(15, 18, 22, 180))
-    painter.drawRoundedRect(4, 4, 56, 56, 14, 14)
+
+    s = size / 32.0
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(_TRAY_PLATE)
+    painter.drawRoundedRect(0, 0, size, size, 7 * s, 7 * s)
+
+    paint_raven_solid(painter, s, fill_color=color, eye_punch_color=_TRAY_PLATE)
+
     if urgent:
-        painter.setPen(QColor("#101418"))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#ff3b3b"))
+        badge_c = QPointF(size - 12.0, size - 12.0)
+        painter.drawEllipse(badge_c, 11.0, 11.0)
+        painter.setPen(QColor("#141821"))
         font = QFont()
         font.setStyleHint(QFont.StyleHint.SansSerif)
         font.setBold(True)
-        font.setPointSize(28)
+        font.setPointSize(13)
         painter.setFont(font)
-        painter.drawText(pix.rect(), int(Qt.AlignmentFlag.AlignCenter), "!")
+        painter.drawText(
+            QRectF(badge_c.x() - 11.0, badge_c.y() - 11.0, 22.0, 22.0),
+            int(Qt.AlignmentFlag.AlignCenter),
+            "!",
+        )
     painter.end()
     return QIcon(pix)
 

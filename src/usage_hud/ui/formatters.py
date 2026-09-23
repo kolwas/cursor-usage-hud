@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 
 from usage_hud.cycle import infer_cycle_start
 from usage_hud.models import Alert, AlertLevel, BurnProjection, Metric, ProviderSnapshot
+from usage_hud.ui.raven_glyph import paint_raven_solid
+
+_BADGE_PLATE = QColor(35, 42, 53)  # same dark plate as the app/tray icon
 
 # Compact tag for a metric on the chip — the full Metric.label (e.g.
 # "Included plan") stays as-is everywhere else (flyout, tray tooltip); only
@@ -335,24 +338,43 @@ def icon_severity(snapshots: list[ProviderSnapshot], alerts: list[Alert]) -> tup
 
 
 def badge_icon(snapshots: list[ProviderSnapshot], alerts: list[Alert]) -> QIcon:
-    """Plain colored icon: green/orange/red for status, a small "!" only when
-    something has actually crossed an alert threshold — no raw percent number."""
+    """The raven, tinted by status: green/orange/red, a small "!" only when
+    something has actually crossed an alert threshold — no raw percent
+    number. Sets the chip window's own icon (hud.py) and the Windows
+    taskbar button icon (taskbar_win.py) on every refresh, so if this drew
+    anything other than the raven it would silently overwrite the app icon
+    branding.py sets at startup with a plain colored square — which is
+    exactly what it did before this used the shared raven glyph."""
     color, urgent = icon_severity(snapshots, alerts)
 
-    pix = QPixmap(64, 64)
+    size = 64
+    pix = QPixmap(size, size)
     pix.fill(QColor(0, 0, 0, 0))
     painter = QPainter(pix)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setBrush(color)
-    painter.setPen(QColor(16, 20, 28))
-    painter.drawRoundedRect(2, 2, 60, 60, 14, 14)
+
+    s = size / 32.0
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(_BADGE_PLATE)
+    painter.drawRoundedRect(0, 0, size, size, 7 * s, 7 * s)
+
+    paint_raven_solid(painter, s, fill_color=color, eye_punch_color=_BADGE_PLATE)
+
     if urgent:
-        painter.setPen(QColor("#101418"))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#ff3b3b"))
+        badge_c = QPointF(size - 12.0, size - 12.0)
+        painter.drawEllipse(badge_c, 11.0, 11.0)
+        painter.setPen(QColor("#141821"))
         font = QFont()
         font.setStyleHint(QFont.StyleHint.SansSerif)
         font.setBold(True)
-        font.setPointSize(28)
+        font.setPointSize(13)
         painter.setFont(font)
-        painter.drawText(pix.rect(), int(Qt.AlignmentFlag.AlignCenter), "!")
+        painter.drawText(
+            QRectF(badge_c.x() - 11.0, badge_c.y() - 11.0, 22.0, 22.0),
+            int(Qt.AlignmentFlag.AlignCenter),
+            "!",
+        )
     painter.end()
     return QIcon(pix)
