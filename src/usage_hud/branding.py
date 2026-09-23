@@ -1,4 +1,4 @@
-"""App identity — name shown to the OS, and the quail icon.
+"""App identity — name shown to the OS, and the raven icon.
 
 A single place for both so the taskbar/tray/.desktop entry/autostart
 shortcut all agree, instead of the name or icon path being retyped at each

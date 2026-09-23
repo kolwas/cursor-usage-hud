@@ -16,6 +16,11 @@ configure to get started, only to hide what you don't use (see [Providers](#prov
 | OpenCode Go | `opencode-go` / `opencode` API key | yes — its own `/zen/go/v1/usage` |
 | OpenAI / ChatGPT | OpenCode OAuth (when connected) | yes — its own account-usage endpoint |
 | Claude | Claude Desktop log + `~/.claude.json` plan metadata | **no** — see below |
+| GitHub (Actions/storage billing) | a token you configure — **off by default** | yes — its own `api.github.com` billing endpoints |
+
+GitHub Actions/storage billing is not an AI service and, unlike everything above, has no local
+session file to auto-detect — it only appears once you type a token into **Settings → Services**
+(or set `GITHUB_TOKEN` yourself). Nothing short of that activates it.
 
 Each provider only ever talks to *that vendor's own* API, using a token the corresponding app
 (Cursor, OpenCode) already stored on this machine — usage-hud does not introduce a new place
@@ -46,9 +51,24 @@ account values, or personal identifiers** — verified before every publish.
 
 ## Configuration
 
-Everything is an environment variable, loaded from a `.env` file next to the source (copy
-`.env.example` → `.env`) or from the real environment. All are optional; sane defaults ship
-with the tool.
+**Settings dialog** — the easy path, no file editing: tray icon → right-click → **Settings…**,
+or right-click the chip itself → **Settings…**. Two tabs:
+
+- **General** — refresh interval, chip opacity, popup duration, display mode (always-visible
+  chip vs. tray-only), and the three alert thresholds.
+- **Services** — one box per provider: an enable/disable checkbox, a plain-language
+  detected/not-detected line, and (GitHub only) the token/login fields it actually needs.
+  Claude/Anthropic deliberately has no credential field here — see
+  [Privacy & credentials](#privacy--credentials).
+
+Saving applies immediately (no restart) and writes to `settings.json` in the state dir — never
+into the repo, never into `.env`.
+
+Everything below is the same configuration as **environment variables** instead — useful for a
+fixed/scripted install, or to check into your own dotfiles. Loaded from a `.env` file next to
+the source (copy `.env.example` → `.env`) or the real environment. An explicit environment
+variable always wins over whatever the Settings dialog last saved. All are optional; sane
+defaults ship with the tool.
 
 ### Display
 
@@ -73,11 +93,12 @@ with the tool.
 
 Only pay for some of these? Hide the rest — either from the running app or before it ever starts:
 
-- **Tray → Providers** — checkboxes, persisted to `providers.json` in the state dir; takes
-  effect on the next refresh without a restart.
+- **Settings → Services** (or the tray's **Providers** submenu — same checkboxes, same file) —
+  persisted to `providers.json` in the state dir; takes effect on the next refresh without a
+  restart.
 - **`USAGE_HUD_DISABLE`** — comma-separated provider IDs, e.g.
   `USAGE_HUD_DISABLE=openai,anthropic,opencode-go`. IDs: `cursor`, `copilot`, `opencode-go`,
-  `openai`, `anthropic`, `cloud`.
+  `openai`, `anthropic`, `github`, `cloud`.
 
 A disabled provider is never fetched, never shown, and — for Claude specifically — its local
 files are simply not read.
@@ -95,7 +116,7 @@ files are simply not read.
 | `CLAUDE_DESKTOP_DIR` | auto-detected | Claude Desktop's user-data folder (holds `plan-usage-history.json`) |
 | `CLAUDE_JSON` | `~/.claude.json` | Path to Claude's account-profile file |
 | `USAGE_HUD_ENABLE_CLOUD` | off | Show the placeholder cloud-credits gauge |
-| `GITHUB_TOKEN` / `GITHUB_LOGIN` | — | Read by a GitHub Actions/storage billing provider that exists in the code but is **not currently wired into auto-discovery** — set only if you re-enable it yourself in `providers/registry.py` |
+| `GITHUB_TOKEN` / `GITHUB_LOGIN` | — | Activates the GitHub Actions/storage billing row (off unless set — see [What it tracks](#what-it-tracks)); same fields as Settings → Services → GitHub |
 
 ## Claude: how the limits actually work
 
@@ -150,12 +171,12 @@ Cla 7d    🥧 6d     2%
 - Pie wedge = time left in that window; its **color follows usage severity**, not time — a
   clock winding down on a near-full gauge reads as alarming even with hours still on the clock.
 - The `+16d`/`-24d` badge is a burn-rate prediction (days before/after renewal at the current
-  pace) with a tiny timeline underneath it: track = the whole billing cycle, filled = elapsed
-  so far, dot = where that pace lands.
+  pace) with a tiny timeline underneath it: track = the whole billing cycle, dim fill = elapsed
+  so far, coloured flag = where that pace lands. No flag = nothing projected (not at risk yet).
 - Click chip → details (flees on hover unless Alt+drag pinned)
 - **Tray icon click** → **pinned details** (does not flee; click chip to collapse)
-- Tray right-click → subscription breakdown, **Providers** on/off, Hide chip
-- **Right-click chip → Hide** (60m / 180m / day / forever)
+- **Right-click chip → Details / Hide / Settings…**
+- Tray right-click → subscription breakdown, **Providers** on/off, Hide chip, **Settings…**
 - Alt+drag → pin chip position
 
 ### KDE / Plasma

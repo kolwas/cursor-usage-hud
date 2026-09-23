@@ -33,6 +33,7 @@ class UsageHudApp:
 
         self.panel = WeatherPanel(opacity=settings.opacity, history=self.history)
         self.panel.hide_requested.connect(self.hide_to_tray)
+        self.panel.settings_requested.connect(self.open_settings)
 
         self.tray = TrayController(
             on_refresh=self.refresh,

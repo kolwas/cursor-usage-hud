@@ -72,6 +72,7 @@ class WeatherPanel(QWidget):
     toggled = Signal(bool)
     # minutes; None = forever
     hide_requested = Signal(object)
+    settings_requested = Signal()
 
     def __init__(self, opacity: float = 0.96, history: HistoryStore | None = None) -> None:
         super().__init__()
@@ -268,6 +269,12 @@ class WeatherPanel(QWidget):
         act_details.triggered.connect(self.toggle)
         menu.addAction(act_details)
         menu.addMenu(self._hide_submenu())
+        menu.addSeparator()
+        # Right on the chip, not just buried in the tray icon's own menu —
+        # "easily accessible" meant reachable from where the user already is.
+        act_settings = QAction("Settings…")
+        act_settings.triggered.connect(self.settings_requested.emit)
+        menu.addAction(act_settings)
         menu.exec(self.mapToGlobal(pos))
 
     def _hide_submenu(self) -> QMenu:
