@@ -556,12 +556,19 @@ class WeatherPanel(QWidget):
         return mini_charts.sparkline_icon(values, color, hot=hot)
 
     # Chip table columns: Label | Clock | Days | Hours | Minutes | Percent |
-    # Timeline | ETA-Days | ETA-Hours | ETA-Minutes. Every days/hours/minutes
+    # Usage bar | ETA-Days | ETA-Hours | ETA-Minutes. Every days/hours/minutes
     # trio is three separate columns (not one "18d 21h 29m" or "+13d 2h 14m"
     # string) so each unit's digits line up down the table — a bare "18d"
     # next to "0d" doesn't visually align, three right-aligned numeric
     # columns do. The ETA badge gets the same treatment as the reset
     # countdown for the same reason.
+    #
+    # The chart column is a plain percent-used bar (mini_charts.usage_bar_
+    # icon), not the richer cycle-progress-plus-exhaustion-flag timeline —
+    # that one encodes two things at once (time elapsed AND a projected
+    # date) and kept reading as unclear at chip scale through several
+    # redesign passes. The flyout/expanded view still draws the full
+    # timeline (_timeline_chart) next to the words that explain it.
     _CHIP_COLS = 10
     _CHIP_RIGHT_ALIGN = {2, 3, 4, 5, 7, 8, 9}
     _CHIP_TIGHT_PAD = {3, 4, 8, 9}  # hours/minutes sit close to their own days
@@ -677,7 +684,7 @@ class WeatherPanel(QWidget):
                         hours_html,
                         minutes_html,
                         pct_html,
-                        self._timeline_chart(snap, metric, proj),
+                        mini_charts.usage_bar_icon(pct, QColor(color)),
                         eta_days,
                         eta_hours,
                         eta_minutes,

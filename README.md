@@ -170,9 +170,14 @@ Cla 7d    🥧 6d     2%
 
 - Pie wedge = time left in that window; its **color follows usage severity**, not time — a
   clock winding down on a near-full gauge reads as alarming even with hours still on the clock.
-- The `+16d`/`-24d` badge is a burn-rate prediction (days before/after renewal at the current
-  pace) with a tiny timeline underneath it: track = the whole billing cycle, dim fill = elapsed
-  so far, coloured flag = where that pace lands. No flag = nothing projected (not at risk yet).
+- The small bar next to the percent is exactly that percent, filled that far, colored by
+  severity — nothing else to decode. A richer burn-timeline chart (cycle progress plus a flag
+  for the projected exhaustion date) exists too, but only in the expanded/flyout view next to
+  the words that explain it — cramming two encodings into one 38x10px chip icon never read
+  clearly no matter how it was drawn.
+- The `+16d`/`-24d` badge is the burn-rate prediction itself (days before/after renewal at the
+  current pace); a row that's genuinely on track to run out (or whose pace just spiked) gets
+  its whole line tinted, not just that one badge.
 - Click chip → details (flees on hover unless Alt+drag pinned)
 - **Tray icon click** → **pinned details** (does not flee; click chip to collapse)
 - **Right-click chip → Details / Hide / Settings…**

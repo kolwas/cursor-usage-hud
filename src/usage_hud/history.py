@@ -53,8 +53,17 @@ def _recent_spike(
     slice, so it is already inflated by the very burst this is supposed to
     catch — comparing a spike to a baseline the spike has already poisoned
     can never trip. Instead this compares the last window_minutes against
-    the pace over the OLDER history in the same series (before that
-    window), a baseline the recent burst hasn't touched.
+    the pace over the OLDER history in ``series`` (before that window).
+
+    Callers MUST only pass a same-cycle-scoped ``series`` (see
+    ``series_is_same_cycle`` at the call site) — the "older" bucket here has
+    no idea a cycle reset happened partway through and would otherwise treat
+    a previous, unrelated window's pace as this window's baseline. That is
+    meaningless for a short window like Claude's 5h: one session's pace says
+    nothing about the next one's, unlike a 7-day window where "earlier this
+    same week" is at least a coherent comparison. When there isn't yet
+    enough same-cycle history to compare against, the caller skips this
+    check entirely rather than let it fall back to a cross-cycle baseline.
     """
     cutoff = now - timedelta(minutes=window_minutes)
     points = sorted(
@@ -325,6 +334,7 @@ class HistoryStore:
                     if s.get("provider_id") == snap.provider_id
                     and _metric_level(s, metric.key) is not None
                 ]
+                series_is_same_cycle = False
                 if cycle_key is not None:
                     same_cycle = [
                         s
@@ -333,6 +343,7 @@ class HistoryStore:
                     ]
                     if len(same_cycle) >= 2:
                         series = same_cycle
+                        series_is_same_cycle = True
 
                 used_today = 0.0
                 if len(series) >= 2:
@@ -405,7 +416,9 @@ class HistoryStore:
                     renewal_offset = days_to_exhaust - days_left
 
                 hot = avg_daily > 0 and used_today >= burn_multiplier * max(avg_daily, 1e-9)
-                rocketing = _recent_spike(series, metric.key, now, burn_multiplier)
+                rocketing = series_is_same_cycle and _recent_spike(
+                    series, metric.key, now, burn_multiplier
+                )
                 rate_label = f"~{avg_daily:.2f}%/day" if unit_is_pct else f"~{avg_daily:.1f}/day"
                 confidence_note = "" if confident else " (early estimate)"
 

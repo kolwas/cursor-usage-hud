@@ -267,15 +267,29 @@ def test_no_cycle_length_known_is_left_unconstrained(tmp_path):
 
 
 def _cursor_snap(now: datetime, used: float) -> ProviderSnapshot:
+    # cycle_start/cycle_end anchor to the module-level NOW, not to this
+    # sample's own `now` — a real billing cycle does not shift between
+    # polls, and several tests record a handful of samples spread across
+    # minutes/days that are all meant to be the SAME ongoing cycle (so the
+    # same-cycle history-scoping in projections() actually groups them).
+    # cycle_end is set on the Metric itself, not just the snapshot: the
+    # same-cycle filter keys off each STORED sample's per-metric cycle_end
+    # (_metric_cycle_end), which is only ever recorded when Metric.cycle_end
+    # is set — leaving it off silently made every recorded sample look
+    # cycle-less and the same-cycle grouping could never match anything.
+    cycle_end = NOW + timedelta(days=20)
     return ProviderSnapshot(
         provider_id="cursor",
         title="Cursor",
         ok=True,
         fetched_at=now,
-        cycle_start=now - timedelta(days=10),
-        cycle_end=now + timedelta(days=20),
+        cycle_start=NOW - timedelta(days=10),
+        cycle_end=cycle_end,
         metrics=[
-            Metric(key="included", label="Included", used=used, limit=100.0, unit="%", percent_used=used)
+            Metric(
+                key="included", label="Included", used=used, limit=100.0, unit="%",
+                percent_used=used, cycle_end=cycle_end,
+            )
         ],
     )
 
@@ -395,6 +409,54 @@ def test_rocketing_fires_on_a_short_rolling_window_despite_inflated_avg_daily(tm
     proj = _proj(store, snap, key="five_hour")
     assert proj.avg_daily > 100  # confirms the trap: already-inflated baseline
     assert proj.rocketing is True
+
+
+def test_rocketing_never_fires_from_a_previous_already_reset_cycles_pace(tmp_path):
+    """"Is this fast" for a short window like Claude's 5h can only be judged
+    against ITS OWN history — a previous 5h session's pace is a different,
+    unrelated period and is not a valid baseline (reported: "5h nie jestes w
+    stanie ocenic patrzac na poprzednie 5h"). Right after a reset, before
+    this window has recorded at least 2 samples of its own, rocketing must
+    stay False rather than reach back across the reset for a baseline."""
+    store = HistoryStore(tmp_path / "history.json")
+
+    def five_hour_snap(
+        ts: datetime, used: float, *, cycle_start: datetime, cycle_end: datetime
+    ) -> ProviderSnapshot:
+        return ProviderSnapshot(
+            provider_id="anthropic",
+            title="Claude",
+            ok=True,
+            fetched_at=ts,
+            cycle_start=cycle_start,
+            cycle_end=cycle_end,
+            metrics=[
+                Metric(
+                    key="five_hour", label="5h", used=used, limit=100.0, unit="%",
+                    percent_used=used, cycle_end=cycle_end,
+                )
+            ],
+        )
+
+    # A fast, unrelated climb well inside the PREVIOUS 5h session.
+    prev_start = NOW - timedelta(hours=6)
+    prev_end = prev_start + timedelta(hours=5)
+    store.record(
+        [five_hour_snap(prev_start + timedelta(hours=1), 10.0, cycle_start=prev_start, cycle_end=prev_end)]
+    )
+    store.record(
+        [five_hour_snap(prev_start + timedelta(hours=2), 70.0, cycle_start=prev_start, cycle_end=prev_end)]
+    )
+
+    # New cycle just started — only one sample of its own recorded so far,
+    # nowhere near enough to say anything about ITS pace yet.
+    new_start = NOW - timedelta(minutes=20)
+    new_end = new_start + timedelta(hours=5)
+    snap = five_hour_snap(NOW, 18.0, cycle_start=new_start, cycle_end=new_end)
+    store.record([snap])
+
+    proj = _proj(store, snap, key="five_hour")
+    assert proj.rocketing is False
 
 
 def test_two_samples_a_minute_apart_are_not_enough_of_a_trend(tmp_path):

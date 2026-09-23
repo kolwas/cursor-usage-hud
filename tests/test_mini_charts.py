@@ -58,6 +58,37 @@ def test_burn_timeline_icon_unknown_elapsed_is_distinct_from_zero():
     assert unknown != zero
 
 
+@pytest.mark.parametrize("pct", [0.0, 1.0, 25.0, 99.9, 100.0])
+def test_usage_bar_icon_renders_for_every_percent(pct):
+    mini_charts = _import_mini_charts()
+    tag = mini_charts.usage_bar_icon(pct, QColor("#5ddea0"))
+    assert tag.startswith('<img src="data:image/png;base64,')
+
+
+def test_usage_bar_icon_fill_grows_with_percent():
+    """The one thing this bar encodes: more percent, more fill — a wider bar
+    at 80% than at 10%, nothing else changing."""
+    mini_charts = _import_mini_charts()
+    low = mini_charts.usage_bar_icon(10.0, QColor("#5ddea0"))
+    high = mini_charts.usage_bar_icon(80.0, QColor("#5ddea0"))
+    assert low != high
+
+
+def test_usage_bar_icon_unknown_percent_is_distinct_from_zero():
+    mini_charts = _import_mini_charts()
+    unknown = mini_charts.usage_bar_icon(None, QColor("#8ec8ff"))
+    zero = mini_charts.usage_bar_icon(0.0, QColor("#8ec8ff"))
+    assert unknown != zero
+
+
+def test_usage_bar_icon_clamps_out_of_range_percent_without_crashing():
+    mini_charts = _import_mini_charts()
+    tag = mini_charts.usage_bar_icon(140.0, QColor("#ff8a80"))
+    assert "data:image/png;base64," in tag
+    tag2 = mini_charts.usage_bar_icon(-5.0, QColor("#ff8a80"))
+    assert "data:image/png;base64," in tag2
+
+
 def test_burn_timeline_icon_clamps_out_of_range_fractions_without_crashing():
     mini_charts = _import_mini_charts()
     # Negative elapsed (clock skew) and an exhaustion far past the cycle end

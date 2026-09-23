@@ -101,6 +101,57 @@ def clock_pie_icon(
     return _img_tag(_data_uri(pix), size, size)
 
 
+def usage_bar_icon(
+    pct: float | None,
+    color: QColor,
+    *,
+    width: int = 38,
+    height: int = 10,
+) -> str:
+    """The chip's own usage bar: fill width = percent used, full stop — no
+    second axis, no marker to decode. It exists because the richer burn
+    timeline (track = cycle, dim fill = elapsed time, flag = projected
+    exhaustion) kept reading as unclear at chip scale even after several
+    passes — two encodings sharing one 38x10px picture is one too many for
+    a glance. This is what the CHIP shows; the flyout/expanded view still
+    draws the full burn timeline next to the words that explain it, where
+    there is room to.
+
+    Deliberately the same size and position as the old chart column so the
+    table layout does not shift, and the same "dashed track, nothing
+    plotted" convention for ``pct=None`` as every other icon here.
+    """
+    bar_h = 4
+    pix = QPixmap(width, height)
+    pix.fill(QColor(0, 0, 0, 0))
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    track_y = (height - bar_h) / 2
+
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(_PLATE)
+    painter.drawRoundedRect(0, 0, width, height, 3, 3)
+
+    if pct is None:
+        painter.setPen(_unknown_pen())
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(1, int(track_y), width - 2, bar_h, 1, 1)
+        painter.end()
+        return _img_tag(_data_uri(pix), width, height)
+
+    frac = max(0.0, min(1.0, pct / 100.0))
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(_TRACK)
+    painter.drawRoundedRect(1, int(track_y), width - 2, bar_h, 1, 1)
+
+    if frac > 0:
+        painter.setBrush(color)
+        painter.drawRoundedRect(1, int(track_y), max(3, round((width - 2) * frac)), bar_h, 1, 1)
+
+    painter.end()
+    return _img_tag(_data_uri(pix), width, height)
+
+
 def burn_timeline_icon(
     elapsed_frac: float | None,
     exhaust_frac: float | None,
