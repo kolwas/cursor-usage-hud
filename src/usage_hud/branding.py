@@ -1,4 +1,8 @@
-"""App identity — name shown to the OS, and the raven icon.
+"""App identity — name shown to the OS, and the static app icon (a raven
+perched on a boar, in a military palette — see tools/make_icon.py and
+usage_hud.ui.emblem_glyph). The live tray/taskbar status icon is a
+different, simpler mark (usage_hud.ui.raven_glyph) and does not come from
+here.
 
 A single place for both so the taskbar/tray/.desktop entry/autostart
 shortcut all agree, instead of the name or icon path being retyped at each
