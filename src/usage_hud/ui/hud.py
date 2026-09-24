@@ -35,7 +35,7 @@ from usage_hud.ui.formatters import (
     reset_eta_parts,
     reset_fraction_remaining,
 )
-from usage_hud.ui.raven_glyph import raven_watermark_html
+from usage_hud.ui.raven_glyph import ANIM_FRAME_COUNT, raven_watermark_html
 
 _ETA_COLOR = {"bad": "#ff8a80", "warn": "#ffb020", "ok": "#8ec8ff", "tentative": "#9aa3b2"}
 
@@ -46,6 +46,9 @@ _ETA_COLOR = {"bad": "#ff8a80", "warn": "#ffb020", "ok": "#8ec8ff", "tentative":
 _RAVEN_MARK_SIZE = 40
 _RAVEN_MARK_COLOR = QColor("#cbbf8f")
 _RAVEN_MARK_EYE = QColor("#c9a24a")
+# Idle fidget, not a real walk cycle — slow enough to read as "alive", not
+# so fast it competes for attention with the data next to it.
+_RAVEN_ANIM_MS = 550
 
 # Single-monitor flee: with nowhere else to jump to, the chip hides itself
 # instead — this is how far (px) the cursor can get before it's "nearby"
@@ -131,14 +134,11 @@ class WeatherPanel(QWidget):
         # The app's own mark, off to the side of the data — see
         # raven_glyph.raven_watermark_html for why it's a fixed color, not
         # severity-tinted like the live status icons.
+        self._raven_frame = 0
         self._raven_mark = QLabel()
         self._raven_mark.setTextFormat(Qt.TextFormat.RichText)
         self._raven_mark.setStyleSheet("background: transparent;")
-        self._raven_mark.setText(
-            raven_watermark_html(
-                _RAVEN_MARK_SIZE, line_color=_RAVEN_MARK_COLOR, eye_color=_RAVEN_MARK_EYE
-            )
-        )
+        self._raven_mark.setText(self._raven_mark_html())
         self._raven_mark.setFixedSize(_RAVEN_MARK_SIZE, _RAVEN_MARK_SIZE)
 
         content_col = QVBoxLayout()
@@ -171,6 +171,26 @@ class WeatherPanel(QWidget):
         self._proximity_timer.setInterval(_PROXIMITY_POLL_MS)
         self._proximity_timer.timeout.connect(self._check_single_screen_proximity)
         self._proximity_timer.start()
+
+        # The watermark's own idle fidget — independent of the data refresh
+        # timer (app.py's), which only fires every couple of minutes and
+        # would make the bird look frozen between refreshes.
+        self._raven_anim_timer = QTimer(self)
+        self._raven_anim_timer.setInterval(_RAVEN_ANIM_MS)
+        self._raven_anim_timer.timeout.connect(self._tick_raven_mark)
+        self._raven_anim_timer.start()
+
+    def _raven_mark_html(self) -> str:
+        return raven_watermark_html(
+            _RAVEN_MARK_SIZE,
+            line_color=_RAVEN_MARK_COLOR,
+            eye_color=_RAVEN_MARK_EYE,
+            frame=self._raven_frame,
+        )
+
+    def _tick_raven_mark(self) -> None:
+        self._raven_frame = (self._raven_frame + 1) % ANIM_FRAME_COUNT
+        self._raven_mark.setText(self._raven_mark_html())
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
         # Pinned tray details stay open until explicit collapse — no click-away.
