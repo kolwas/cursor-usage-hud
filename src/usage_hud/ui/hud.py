@@ -14,7 +14,7 @@ from PySide6.QtGui import (
     QPen,
     QScreen,
 )
-from PySide6.QtWidgets import QApplication, QLabel, QMenu, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QMenu, QVBoxLayout, QWidget
 
 from usage_hud.branding import APP_NAME
 from usage_hud.history import HistoryStore
@@ -35,8 +35,17 @@ from usage_hud.ui.formatters import (
     reset_eta_parts,
     reset_fraction_remaining,
 )
+from usage_hud.ui.raven_glyph import raven_watermark_html
 
 _ETA_COLOR = {"bad": "#ff8a80", "warn": "#ffb020", "ok": "#8ec8ff", "tentative": "#9aa3b2"}
+
+# The chip's own side watermark — a fixed military khaki, not severity-tinted
+# (it's the app's mark, not a status indicator; the data around it already
+# carries the color-coded status). Sized to roughly match the chip's own
+# height so it reads as "part of the frame", not an unrelated sticker.
+_RAVEN_MARK_SIZE = 40
+_RAVEN_MARK_COLOR = QColor("#cbbf8f")
+_RAVEN_MARK_EYE = QColor("#c9a24a")
 
 # Single-monitor flee: with nowhere else to jump to, the chip hides itself
 # instead — this is how far (px) the cursor can get before it's "nearby"
@@ -119,11 +128,29 @@ class WeatherPanel(QWidget):
         self._flyout.setStyleSheet("color: #e8ecf4; background: transparent;")
         self._flyout.hide()
 
-        layout = QVBoxLayout(self)
+        # The app's own mark, off to the side of the data — see
+        # raven_glyph.raven_watermark_html for why it's a fixed color, not
+        # severity-tinted like the live status icons.
+        self._raven_mark = QLabel()
+        self._raven_mark.setTextFormat(Qt.TextFormat.RichText)
+        self._raven_mark.setStyleSheet("background: transparent;")
+        self._raven_mark.setText(
+            raven_watermark_html(
+                _RAVEN_MARK_SIZE, line_color=_RAVEN_MARK_COLOR, eye_color=_RAVEN_MARK_EYE
+            )
+        )
+        self._raven_mark.setFixedSize(_RAVEN_MARK_SIZE, _RAVEN_MARK_SIZE)
+
+        content_col = QVBoxLayout()
+        content_col.setSpacing(8)
+        content_col.addWidget(self._chip)
+        content_col.addWidget(self._flyout)
+
+        layout = QHBoxLayout(self)
         layout.setContentsMargins(14, 8, 14, 8)
-        layout.setSpacing(8)
-        layout.addWidget(self._chip)
-        layout.addWidget(self._flyout)
+        layout.setSpacing(10)
+        layout.addLayout(content_col, 1)
+        layout.addWidget(self._raven_mark, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.setMinimumWidth(200)
 
@@ -219,13 +246,17 @@ class WeatherPanel(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = self.rect().adjusted(1, 1, -1, -1)
+        # Panel chrome (background/border) follows the app's military
+        # branding — a dark olive plate, khaki border — same palette as the
+        # icon. Data colors (severity, ETA badges) stay untouched: those are
+        # functional, not aesthetic, so they don't follow this palette.
         if self._expanded:
-            painter.setBrush(QColor(28, 30, 36, 245))
-            painter.setPen(QPen(QColor(120, 170, 255, 90), 1))
+            painter.setBrush(QColor(26, 30, 20, 245))
+            painter.setPen(QPen(QColor(203, 191, 143, 100), 1))
             radius = 12
         else:
-            painter.setBrush(QColor(24, 28, 36, 250))
-            painter.setPen(QPen(QColor(100, 160, 255, 140), 1))
+            painter.setBrush(QColor(22, 26, 17, 250))
+            painter.setPen(QPen(QColor(203, 191, 143, 150), 1))
             radius = 10
         painter.drawRoundedRect(rect, radius, radius)
         super().paintEvent(event)
@@ -423,8 +454,13 @@ class WeatherPanel(QWidget):
             # (10 columns total) — the old 420px cap was clipping them right
             # off the edge, invisibly. Let it size to its real content
             # (still with a sane ceiling so one long provider title can't
-            # blow the chip up arbitrarily).
-            self.setFixedWidth(max(220, min(720, chip_hint.width() + 36)))
+            # blow the chip up arbitrarily). +side_mark accounts for the
+            # raven watermark beside the table (_RAVEN_MARK_SIZE) plus the
+            # layout spacing between it and the table — without it the
+            # window was sized for the table alone and the mark got
+            # squeezed against the edge instead of sitting beside it.
+            side_mark = _RAVEN_MARK_SIZE + 10
+            self.setFixedWidth(max(220, min(720, chip_hint.width() + 36 + side_mark)))
         else:
             self.setMinimumHeight(0)
             self.setMaximumHeight(16777215)

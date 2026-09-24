@@ -9,9 +9,9 @@ from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 
 from usage_hud.cycle import infer_cycle_start
 from usage_hud.models import Alert, AlertLevel, BurnProjection, Metric, ProviderSnapshot
-from usage_hud.ui.emblem_glyph import paint_emblem_solid
+from usage_hud.ui.raven_glyph import paint_raven_solid
 
-_BADGE_PLATE = QColor(35, 42, 53)  # same dark plate as the app/tray icon
+_BADGE_PLATE = QColor("#333a24")  # military olive — matches the branding icon's plate
 
 # Compact tag for a metric on the chip — the full Metric.label (e.g.
 # "Included plan") stays as-is everywhere else (flyout, tray tooltip); only
@@ -338,18 +338,15 @@ def icon_severity(snapshots: list[ProviderSnapshot], alerts: list[Alert]) -> tup
 
 
 def badge_icon(snapshots: list[ProviderSnapshot], alerts: list[Alert]) -> QIcon:
-    """The boar (from the emblem — see ui/emblem_glyph.py), tinted by
-    status: green/orange/red, a small "!" only when something has actually
-    crossed an alert threshold — no raw percent number. Sets the chip
-    window's own icon (hud.py) and the Windows taskbar button icon
-    (taskbar_win.py) on every refresh, so if this drew anything other than
-    the shared glyph it would silently overwrite the app icon branding.py
-    sets at startup — which is exactly what it did before this used a
-    shared module. Boar only, not boar+raven: this renders at real tray/
-    taskbar scale (16-24px on screen) regardless of the 64px source pixmap,
-    and two detailed shapes do not survive that — see
-    emblem_glyph.SOLID_MAX_SIZE. The raven stays perched on the boar only
-    on the static branding icon (tools/make_icon.py)."""
+    """The raven, tinted by status: green/orange/red, a small "!" only when
+    something has actually crossed an alert threshold — no raw percent
+    number. Sets the chip window's own icon (hud.py) and the Windows
+    taskbar button icon (taskbar_win.py) on every refresh, so if this drew
+    anything other than the shared glyph it would silently overwrite the
+    app icon branding.py sets at startup — which is exactly what it did
+    before this used a shared module. Plate matches the static branding
+    icon's military olive; the bird itself stays severity-coloured, which
+    is functional, not aesthetic."""
     color, urgent = icon_severity(snapshots, alerts)
 
     size = 64
@@ -363,7 +360,7 @@ def badge_icon(snapshots: list[ProviderSnapshot], alerts: list[Alert]) -> QIcon:
     painter.setBrush(_BADGE_PLATE)
     painter.drawRoundedRect(0, 0, size, size, 7 * s, 7 * s)
 
-    paint_emblem_solid(painter, s, fill_color=color)
+    paint_raven_solid(painter, s, fill_color=color, eye_punch_color=_BADGE_PLATE)
 
     if urgent:
         painter.setPen(Qt.PenStyle.NoPen)
