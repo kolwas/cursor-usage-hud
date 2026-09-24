@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import random
+
 from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QAction,
@@ -35,7 +37,14 @@ from usage_hud.ui.formatters import (
     reset_eta_parts,
     reset_fraction_remaining,
 )
-from usage_hud.ui.raven_glyph import ANIM_FRAME_COUNT, raven_watermark_html
+from usage_hud.ui.raven_glyph import (
+    JUMP_CHANCE,
+    JUMP_FRAME_COUNT,
+    SCENE_HEIGHT,
+    SCENE_WIDTH,
+    at_path_centre,
+    raven_scene_html,
+)
 
 _ETA_COLOR = {"bad": "#ff8a80", "warn": "#ffb020", "ok": "#8ec8ff", "tentative": "#9aa3b2"}
 
@@ -43,12 +52,12 @@ _ETA_COLOR = {"bad": "#ff8a80", "warn": "#ffb020", "ok": "#8ec8ff", "tentative":
 # (it's the app's mark, not a status indicator; the data around it already
 # carries the color-coded status). Sized to roughly match the chip's own
 # height so it reads as "part of the frame", not an unrelated sticker.
-_RAVEN_MARK_SIZE = 40
 _RAVEN_MARK_COLOR = QColor("#cbbf8f")
 _RAVEN_MARK_EYE = QColor("#c9a24a")
-# Idle fidget, not a real walk cycle — slow enough to read as "alive", not
-# so fast it competes for attention with the data next to it.
-_RAVEN_ANIM_MS = 550
+_RAVEN_BUSH_COLOR = QColor("#5c6b3f")
+# A walking pace, not a real-time simulation — slow enough to read as
+# "alive" without competing for attention with the data next to it.
+_RAVEN_ANIM_MS = 260
 
 # Single-monitor flee: with nowhere else to jump to, the chip hides itself
 # instead — this is how far (px) the cursor can get before it's "nearby"
@@ -132,14 +141,20 @@ class WeatherPanel(QWidget):
         self._flyout.hide()
 
         # The app's own mark, off to the side of the data — see
-        # raven_glyph.raven_watermark_html for why it's a fixed color, not
-        # severity-tinted like the live status icons.
-        self._raven_frame = 0
+        # raven_glyph.raven_scene_html for why it's a fixed color, not
+        # severity-tinted like the live status icons. "walk" paces back and
+        # forth; "jump" is the occasional hop-over-the-bush (see
+        # _tick_raven_mark) — never severity-tinted, always this fixed
+        # military khaki, same reasoning as the live status icons' color
+        # being functional rather than decorative.
+        self._raven_mode = "walk"
+        self._raven_step = 0
+        self._raven_jump_frame = 0
         self._raven_mark = QLabel()
         self._raven_mark.setTextFormat(Qt.TextFormat.RichText)
         self._raven_mark.setStyleSheet("background: transparent;")
         self._raven_mark.setText(self._raven_mark_html())
-        self._raven_mark.setFixedSize(_RAVEN_MARK_SIZE, _RAVEN_MARK_SIZE)
+        self._raven_mark.setFixedSize(SCENE_WIDTH, SCENE_HEIGHT)
 
         content_col = QVBoxLayout()
         content_col.setSpacing(8)
@@ -181,15 +196,36 @@ class WeatherPanel(QWidget):
         self._raven_anim_timer.start()
 
     def _raven_mark_html(self) -> str:
-        return raven_watermark_html(
-            _RAVEN_MARK_SIZE,
+        if self._raven_mode == "jump":
+            return raven_scene_html(
+                line_color=_RAVEN_MARK_COLOR,
+                eye_color=_RAVEN_MARK_EYE,
+                bush_color=_RAVEN_BUSH_COLOR,
+                mode="jump",
+                index=self._raven_jump_frame,
+            )
+        return raven_scene_html(
             line_color=_RAVEN_MARK_COLOR,
             eye_color=_RAVEN_MARK_EYE,
-            frame=self._raven_frame,
+            mode="walk",
+            index=self._raven_step,
         )
 
     def _tick_raven_mark(self) -> None:
-        self._raven_frame = (self._raven_frame + 1) % ANIM_FRAME_COUNT
+        if self._raven_mode == "jump":
+            self._raven_jump_frame += 1
+            if self._raven_jump_frame >= JUMP_FRAME_COUNT:
+                # Land back into the walk cycle a little past the bush,
+                # continuing in the direction the hop was drawn (always
+                # left-to-right — see raven_glyph._JUMP_ARC).
+                self._raven_mode = "walk"
+                self._raven_jump_frame = 0
+                self._raven_step += 4
+        else:
+            self._raven_step += 1
+            if at_path_centre(self._raven_step) and random.random() < JUMP_CHANCE:
+                self._raven_mode = "jump"
+                self._raven_jump_frame = 0
         self._raven_mark.setText(self._raven_mark_html())
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
@@ -468,18 +504,22 @@ class WeatherPanel(QWidget):
             # Chip is now one line per gauge, so its height grows with the
             # number of gauges shown instead of staying fixed at one line.
             chip_hint = self._chip.sizeHint()
-            self.setFixedHeight(max(40, min(220, chip_hint.height() + 16)))
+            # Floor is whichever needs more room, the table's own one-line
+            # minimum or the raven scene's fixed height (SCENE_HEIGHT) —
+            # a floor sized only for the table used to clip a few pixels
+            # off the bottom of the watermark on a single-gauge chip.
+            self.setFixedHeight(max(40, SCENE_HEIGHT, min(220, chip_hint.height() + 16)))
             # The table grew a lot wider once the reset countdown and the
             # ETA badge each split into separate days/hours/minutes columns
             # (10 columns total) — the old 420px cap was clipping them right
             # off the edge, invisibly. Let it size to its real content
             # (still with a sane ceiling so one long provider title can't
             # blow the chip up arbitrarily). +side_mark accounts for the
-            # raven watermark beside the table (_RAVEN_MARK_SIZE) plus the
-            # layout spacing between it and the table — without it the
-            # window was sized for the table alone and the mark got
-            # squeezed against the edge instead of sitting beside it.
-            side_mark = _RAVEN_MARK_SIZE + 10
+            # raven scene beside the table (SCENE_WIDTH) plus the layout
+            # spacing between it and the table — without it the window was
+            # sized for the table alone and the mark got squeezed against
+            # the edge instead of sitting beside it.
+            side_mark = SCENE_WIDTH + 10
             self.setFixedWidth(max(220, min(720, chip_hint.width() + 36 + side_mark)))
         else:
             self.setMinimumHeight(0)

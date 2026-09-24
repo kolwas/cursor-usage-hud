@@ -17,22 +17,89 @@ from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap
 _EYE_POINT = (20.0, 11.6)
 _LEG_A = ((12.5, 27.3), (11.3, 30.2))
 _LEG_B = ((16.5, 27.3), (17.7, 30.2))
-
-# A small idle-animation cycle for the watermark (see raven_watermark_html):
-# a gentle rock of the whole glyph (reads as a head bob, since the head is
-# what's furthest from the pivot) plus an alternating raised foot, like a
-# bird shifting its weight — never a real walk cycle, just enough fidget to
-# not look like a frozen sticker. One leg is shortened + pulled slightly
-# in per "lifted" frame; the planted leg is untouched.
 _LEG_A_LIFTED = ((13.0, 27.2), (13.6, 29.1))
 _LEG_B_LIFTED = ((16.0, 27.2), (15.4, 29.1))
-_ANIM_FRAMES: tuple[tuple[float, tuple, tuple], ...] = (
-    (0.0, _LEG_A, _LEG_B),
-    (2.2, _LEG_A_LIFTED, _LEG_B),
-    (0.0, _LEG_A, _LEG_B),
-    (-2.2, _LEG_A, _LEG_B_LIFTED),
+
+# The chip's side watermark is a little scene, not a single static glyph:
+# the raven paces a short path back and forth (see walk_pose) and, once in
+# a while when it crosses the middle, hops over a bush (see jump_pose,
+# paint_bush) instead of just walking past. SCENE_WIDTH/HEIGHT/SCALE are
+# the one shared layout the whole scene is built on — hud.py uses them to
+# size the QLabel that hosts it.
+SCENE_WIDTH = 68
+SCENE_HEIGHT = 44
+_SCALE = 1.05
+_RAVEN_BOX = 32.0 * _SCALE  # the raven_path design grid, at this scale
+_TOP_MARGIN = (SCENE_HEIGHT - _RAVEN_BOX) / 2.0
+_WALK_X_MIN = 2.0
+_WALK_X_MAX = SCENE_WIDTH - _RAVEN_BOX - 2.0
+_WALK_BOB = 2.2  # px the whole bird lifts on the "up" step of its stride
+_WALK_TILT = 3.5  # degrees leaned into the direction of travel
+WALK_CYCLE_STEPS = 16  # one leg of the pace (there and back is double this)
+
+# A short hop arc — (dx, dy, tilt) in pixels/degrees, relative to the bush
+# at the path's centre. Always left-to-right: which way the raven was
+# actually walking when it triggered the jump is not tracked, and a short
+# hop reversing tilt/direction was not worth the extra state for a
+# decoration nobody is meant to scrutinise that closely.
+_JUMP_ARC: tuple[tuple[float, float, float], ...] = (
+    (-15.0, 0.0, 0.0),
+    (-9.0, -4.0, -5.0),
+    (-3.0, -8.0, -2.0),
+    (0.0, -10.0, 2.0),
+    (4.0, -7.0, 5.0),
+    (9.0, -3.0, 3.0),
+    (14.0, 0.0, 0.0),
 )
-ANIM_FRAME_COUNT = len(_ANIM_FRAMES)
+JUMP_FRAME_COUNT = len(_JUMP_ARC)
+# How often, of the times the raven crosses the middle of its path, it
+# hops over the bush instead of walking straight past — "raz na jakis
+# czas", not every single pass.
+JUMP_CHANCE = 1.0 / 5.0
+
+
+def walk_pose(
+    step: int,
+) -> tuple[float, float, float, tuple, tuple, bool]:
+    """(x, y, tilt, leg_a, leg_b, facing_left) for one step of a back-and-
+    forth pace across ``_WALK_X_MIN.._WALK_X_MAX`` — x/y in pixels, tilt in
+    degrees. The leg lifted and the direction leaned into both flip every
+    step, and the whole glyph lifts slightly on the "up" step, so it reads
+    as a walking gait rather than sliding across the path."""
+    cycle = step % (2 * WALK_CYCLE_STEPS)
+    if cycle <= WALK_CYCLE_STEPS:
+        frac = cycle / WALK_CYCLE_STEPS
+        facing_left = False
+    else:
+        frac = 1.0 - (cycle - WALK_CYCLE_STEPS) / WALK_CYCLE_STEPS
+        facing_left = True
+    x = _WALK_X_MIN + (_WALK_X_MAX - _WALK_X_MIN) * frac
+    leg_toggle = step % 2 == 0
+    leg_a, leg_b = (_LEG_A_LIFTED, _LEG_B) if leg_toggle else (_LEG_A, _LEG_B_LIFTED)
+    y = -_WALK_BOB if leg_toggle else 0.0
+    at_a_turn = frac <= 0.0 or frac >= 1.0
+    tilt = 0.0 if at_a_turn else (-_WALK_TILT if facing_left else _WALK_TILT)
+    return x, y, tilt, leg_a, leg_b, facing_left
+
+
+def at_path_centre(step: int) -> bool:
+    """True on the one step per leg of the pace where the raven is
+    passing the bush's spot — where hud.py rolls the dice on JUMP_CHANCE
+    to switch into a jump instead of continuing to walk."""
+    cycle = step % (2 * WALK_CYCLE_STEPS)
+    half = WALK_CYCLE_STEPS // 2
+    return cycle in (half, WALK_CYCLE_STEPS + half)
+
+
+def jump_pose(frame: int) -> tuple[float, float, float, tuple, tuple]:
+    """(x, y, tilt, leg_a, leg_b) for one frame of the hop-over-the-bush
+    arc, relative to the bush's own position at the path's centre. Both
+    legs tuck up for the airborne middle frames."""
+    dx, y, tilt = _JUMP_ARC[frame % JUMP_FRAME_COUNT]
+    x = (_WALK_X_MIN + _WALK_X_MAX) / 2.0 + dx
+    airborne = 1 <= frame <= JUMP_FRAME_COUNT - 2
+    leg_a, leg_b = (_LEG_A_LIFTED, _LEG_B_LIFTED) if airborne else (_LEG_A, _LEG_B)
+    return x, y, tilt, leg_a, leg_b
 
 
 def raven_path(s: float, *, detailed: bool = True) -> QPainterPath:
@@ -95,8 +162,8 @@ def paint_raven_outline(
     """Strokes the detailed contour (no fill) — the "zarys" (outline)
     treatment, for anything above ``SOLID_MAX_SIZE``. Caller owns the
     plate/background and draws it first. ``leg_a``/``leg_b`` default to the
-    static resting pose; raven_watermark_html swaps in a lifted variant to
-    animate a weight-shift."""
+    static resting pose; raven_scene_html swaps in walk/jump variants to
+    animate the gait."""
     pen = QPen(line_color)
     pen.setWidthF(line_width if line_width is not None else max(1.1, 1.7 * s))
     pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
@@ -137,43 +204,73 @@ def paint_raven_solid(
     painter.drawEllipse(QPointF(ex * s, ey * s), max(1.0, 1.1 * s), max(1.0, 1.1 * s))
 
 
-def raven_watermark_html(
-    size: int, *, line_color: QColor, eye_color: QColor | None = None, frame: int = 0
+def paint_bush(painter: QPainter, *, color: QColor, cx: float, cy: float) -> None:
+    """Three overlapping rounded lobes centred on (``cx``, ``cy``) in
+    pixels — just enough to read as a small shrub at this scale, no more
+    detail than the raven's own legs get."""
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(color)
+    for dx, dy, r in ((-4.0, 1.0, 4.0), (0.0, -1.5, 4.6), (4.0, 1.2, 4.0)):
+        painter.drawEllipse(QPointF(cx + dx, cy + dy), r, r)
+
+
+def raven_scene_html(
+    *,
+    line_color: QColor,
+    eye_color: QColor | None = None,
+    bush_color: QColor | None = None,
+    mode: str = "walk",
+    index: int = 0,
 ) -> str:
-    """A standalone ``<img>`` tag of the outline raven on a transparent
-    background — no plate, unlike the tray/badge icons — for dropping into
-    a QLabel's rich text as a decorative mark, e.g. the chip's own side
-    watermark (ui/hud.py), which already sits on the panel's own painted
-    background (see WeatherPanel.paintEvent) and needs no plate of its own.
+    """A standalone ``<img>`` tag of the raven's little scene — SCENE_WIDTH
+    x SCENE_HEIGHT, transparent background (no plate, unlike the tray/badge
+    icons — this sits on the chip panel's own painted background, see
+    WeatherPanel.paintEvent) — for dropping into a QLabel's rich text as
+    the chip's side watermark (ui/hud.py).
 
-    ``frame`` (0..``ANIM_FRAME_COUNT``-1, wrapping) selects a pose from the
-    idle-fidget cycle — a small rock of the whole glyph plus an alternating
-    raised foot. The caller (WeatherPanel's own small QTimer) advances the
-    frame and re-sets this HTML periodically; this function itself is a
-    single static render, not the timer.
+    ``mode="walk"``: ``index`` is a step count (see walk_pose) — the raven
+    paces back and forth across the scene. ``mode="jump"``: ``index`` is a
+    frame in 0..JUMP_FRAME_COUNT-1 (see jump_pose) — the raven hops over a
+    bush drawn at the path's centre. WeatherPanel's own timer owns the mode
+    switch and the frame/step advance; this function only renders one
+    frame of whichever it's told.
     """
-    tilt, leg_a, leg_b = _ANIM_FRAMES[frame % ANIM_FRAME_COUNT]
+    if mode == "jump":
+        x, y, tilt, leg_a, leg_b = jump_pose(index)
+        facing_left = False
+        show_bush = True
+    else:
+        x, y, tilt, leg_a, leg_b, facing_left = walk_pose(index)
+        show_bush = False
 
-    pix = QPixmap(size, size)
+    pix = QPixmap(SCENE_WIDTH, SCENE_HEIGHT)
     pix.fill(QColor(0, 0, 0, 0))
     painter = QPainter(pix)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    s = size / 32.0
 
-    # Rock around the glyph's own centre rather than the canvas corner, so
-    # the tilt reads as the bird leaning, not the whole image sliding.
-    pivot = QPointF(size / 2.0, size / 2.0)
+    if show_bush and bush_color is not None:
+        bush_cx = (_WALK_X_MIN + _WALK_X_MAX) / 2.0 + _RAVEN_BOX / 2.0
+        paint_bush(painter, color=bush_color, cx=bush_cx, cy=_TOP_MARGIN + _RAVEN_BOX - 1.0)
+
+    painter.save()
+    painter.translate(x, _TOP_MARGIN + y)
+    if facing_left:
+        # Mirror within the raven's own local box so it paces back the way
+        # it came instead of moonwalking.
+        painter.translate(_RAVEN_BOX, 0)
+        painter.scale(-1, 1)
+    pivot = QPointF(_RAVEN_BOX / 2.0, _RAVEN_BOX / 2.0)
     painter.translate(pivot)
     painter.rotate(tilt)
     painter.translate(-pivot)
-
     paint_raven_outline(
-        painter, s, line_color=line_color, eye_color=eye_color, legs=True, leg_a=leg_a, leg_b=leg_b
+        painter, _SCALE, line_color=line_color, eye_color=eye_color, legs=True, leg_a=leg_a, leg_b=leg_b
     )
+    painter.restore()
     painter.end()
 
     buf = QBuffer()
     buf.open(QIODevice.OpenModeFlag.WriteOnly)
     pix.save(buf, "PNG")
     encoded = base64.b64encode(bytes(buf.data())).decode("ascii")
-    return f'<img src="data:image/png;base64,{encoded}" width="{size}" height="{size}">'
+    return f'<img src="data:image/png;base64,{encoded}" width="{SCENE_WIDTH}" height="{SCENE_HEIGHT}">'
