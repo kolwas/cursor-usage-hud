@@ -208,10 +208,17 @@ def infer_window_end(
 ) -> datetime | None:
     """Estimate when a rolling window opened, from the local percent series.
 
-    The window start is the last reset visible in the log: either a drop in
-    utilization, or the last zero sample before usage appeared. An all-zero
-    series means no window is running, and a window that should already have
-    rolled is reported as unknown instead of being guessed forward.
+    The window start is the LAST reset visible in the log: either a drop in
+    utilization, or a zero sample — not just the last *decrease*, because a
+    short window (Claude's 5h) can log two separate zero readings back to
+    back (window A ends at 0%, the app is closed, window B has also reset
+    to 0% by the time it reopens) with no decrease between them for a
+    plain "value went down" scan to notice — 0 is not < 0, so the older,
+    already-elapsed zero kept winning over the real, current one. Every
+    zero sample is a reset candidate; the most recent one wins. An
+    all-zero series means no window is running, and a window that should
+    already have rolled again is reported as unknown instead of being
+    guessed forward.
     """
     points: list[tuple[datetime, float]] = []
     for ts, usage in samples:
@@ -226,13 +233,9 @@ def infer_window_end(
         return None
 
     start_idx: int | None = None
-    for i in range(1, len(points)):
-        if points[i][1] < points[i - 1][1]:
+    for i, (_, value) in enumerate(points):
+        if value == 0 or (i > 0 and value < points[i - 1][1]):
             start_idx = i
-    if start_idx is None:
-        for i in range(len(points)):
-            if points[i][1] == 0 and any(v > 0 for _, v in points[i + 1 :]):
-                start_idx = i
     if start_idx is None:
         return None
 

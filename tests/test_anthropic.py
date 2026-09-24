@@ -106,6 +106,32 @@ def test_expired_window_is_unknown_not_guessed_forward():
     assert anthropic.infer_window_end(samples, "fh", timedelta(hours=5), base + timedelta(hours=9)) is None
 
 
+def test_back_to_back_zero_readings_use_the_newer_one_as_the_reset():
+    """Regression: a short window (5h) can log two SEPARATE zero readings
+    with no decrease between them — window A ends at 0%, the app is closed
+    for hours (spanning a whole extra reset with no samples), window B has
+    ALSO reset to 0% by the time it reopens. 0 is not < 0, so a scan for
+    "value went down" never sees the second, real reset and keeps treating
+    the older, already-elapsed one as current — producing an unknown/past
+    end even though the window is plainly still running (pct climbing
+    ever since the second zero). This is exactly what happened live:
+    18:50 fh=0, thirteen-hour gap, 08:00 fh=0, then climbing to 33% by
+    noon — the old code reported no reset time at all.
+    """
+    old_reset = _utc(2026, 9, 23, 18, 50)
+    new_reset = _utc(2026, 9, 24, 8, 0)
+    now = new_reset + timedelta(hours=4)  # still well inside the 5h window
+    samples = [
+        (old_reset - timedelta(hours=1), {"fh": 10}),
+        (old_reset, {"fh": 0}),  # window A's own tail reading
+        (new_reset, {"fh": 0}),  # window B's reset — no decrease from A's 0
+        (new_reset + timedelta(minutes=20), {"fh": 8}),
+        (now, {"fh": 33}),
+    ]
+    end = anthropic.infer_window_end(samples, "fh", timedelta(hours=5), now)
+    assert end == new_reset + timedelta(hours=5)
+
+
 # --------------------------------------------------------------------------- #
 # Desktop log snapshot
 # --------------------------------------------------------------------------- #
