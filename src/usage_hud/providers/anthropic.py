@@ -215,10 +215,19 @@ def infer_window_end(
     to 0% by the time it reopens) with no decrease between them for a
     plain "value went down" scan to notice — 0 is not < 0, so the older,
     already-elapsed zero kept winning over the real, current one. Every
-    zero sample is a reset candidate; the most recent one wins. An
-    all-zero series means no window is running, and a window that should
-    already have rolled again is reported as unknown instead of being
-    guessed forward.
+    zero sample is a reset candidate; the most recent one wins.
+
+    A series where NOTHING was ever above zero means no window is running
+    (or none has ever been observed) and is reported unknown — but a
+    series that has SOME real usage in it and merely happens to end right
+    on a fresh 0% (the sample landing exactly at/just after a reset, which
+    is completely normal for a window that just opened) still has a
+    perfectly good answer: that reset. Only bail on the "nothing at all"
+    case, not "currently reads zero" — those are different things, and
+    conflating them used to make the window disappear from the chip for
+    exactly the few minutes right after it renewed. A window that should
+    already have rolled again with no evidence of that in the log is still
+    reported as unknown rather than being guessed forward.
     """
     points: list[tuple[datetime, float]] = []
     for ts, usage in samples:
@@ -229,7 +238,7 @@ def infer_window_end(
             points.append((ts, float(value)))
         except (TypeError, ValueError):
             continue
-    if not points or points[-1][1] <= 0:
+    if not points or all(v <= 0 for _, v in points):
         return None
 
     start_idx: int | None = None

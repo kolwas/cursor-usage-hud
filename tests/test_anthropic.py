@@ -106,6 +106,25 @@ def test_expired_window_is_unknown_not_guessed_forward():
     assert anthropic.infer_window_end(samples, "fh", timedelta(hours=5), base + timedelta(hours=9)) is None
 
 
+def test_window_that_just_reset_to_zero_still_has_an_end():
+    """Regression: the last sample landing exactly on a fresh 0% (a window
+    that just renewed) used to be treated the same as "nothing has ever
+    been used" and reported as no window at all — for the few minutes
+    right after every single reset, the chip would silently lose the 5h
+    countdown. A series with real prior usage that merely ends on 0% still
+    has a perfectly good answer: that reset, +span.
+    """
+    base = _utc(2026, 9, 15, 8)
+    samples = [
+        (base, {"fh": 25}),
+        (base + timedelta(minutes=30), {"fh": 38}),
+        (base + timedelta(minutes=44), {"fh": 0}),  # the window just renewed
+    ]
+    now = base + timedelta(minutes=47)
+    end = anthropic.infer_window_end(samples, "fh", timedelta(hours=5), now)
+    assert end == base + timedelta(minutes=44) + timedelta(hours=5)
+
+
 def test_back_to_back_zero_readings_use_the_newer_one_as_the_reset():
     """Regression: a short window (5h) can log two SEPARATE zero readings
     with no decrease between them — window A ends at 0%, the app is closed
