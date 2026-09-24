@@ -10,8 +10,15 @@ from typing import Any
 from usage_hud.cycle import infer_cycle_start
 from usage_hud.models import BurnProjection, Metric, ProviderSnapshot
 
-# Ignore noisy first/last-sample rates shorter than this.
-_MIN_ELAPSED_DAYS = 0.25  # 6 hours
+# Ignore noisy first/last-sample same-cycle rates shorter than this — scaled
+# to the window's own length, same idea as the warm-up below. A FIXED 6-hour
+# floor (the original design) is longer than Claude's entire 5h window can
+# ever be, which meant the history-based average — the one that overrides
+# the tautological cycle-pace estimate, see below — could structurally
+# never activate for that window at all, no matter how much same-cycle data
+# accumulated. It would report a fabricated "-0d 0h 00m" ETA forever.
+_MIN_ELAPSED_FRACTION = 0.05
+_MIN_ELAPSED_FLOOR_DAYS = 1.0 / 48.0  # 30 minutes
 _SKIP_KEYS = frozenset({"ondemand"})
 # ~8 days of history at the default 180s refresh — enough to cover a whole
 # Claude 7d weekly window on the sparkline, not just the burn-rate math.
@@ -122,15 +129,35 @@ def _parse_ts(value: str) -> datetime:
     return datetime.fromisoformat(value)
 
 
-def _cycle_end_key(value: datetime | str | None) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value.astimezone(timezone.utc).isoformat()
-    try:
-        return _parse_ts(str(value)).astimezone(timezone.utc).isoformat()
-    except ValueError:
-        return str(value)
+def _as_dt(value: datetime | str) -> datetime:
+    dt = value if isinstance(value, datetime) else _parse_ts(str(value))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+# A rolling window's cycle_end is an ESTIMATE for every provider that (like
+# Claude) never reports a real one — re-inferred fresh on every refresh from
+# whatever of the local sample log is visible that time. That estimate can
+# legitimately shift by hours between refreshes as more of the window's own
+# history comes into view or the detection logic itself changes — observed
+# live: a 7-day window's estimate moved by ~2h15m as its own log accrued.
+# Comparing cycle_end for EXACT equality treated every such refinement as a
+# brand-new cycle, silently cutting a cycle's own earlier samples out of its
+# own history-based average (the average that's supposed to override the
+# tautological cycle-pace estimate — see the comment where this is used).
+# Two genuinely DIFFERENT cycles are always a full window `span` apart
+# (hours for Claude's 5h window, days for 7d) — comfortably bigger than any
+# estimate's real jitter, so a multi-hour tolerance still can't merge two
+# real, distinct cycles.
+_CYCLE_END_DRIFT_TOLERANCE = timedelta(hours=3)
+
+
+def _cycle_ends_match(a: datetime | str | None, b: datetime | str | None) -> bool:
+    if a is None or b is None:
+        return False
+    delta = abs((_as_dt(a) - _as_dt(b)).total_seconds())
+    return delta <= _CYCLE_END_DRIFT_TOLERANCE.total_seconds()
 
 
 def _metric_level(sample: dict[str, Any], key: str) -> float | None:
@@ -319,15 +346,18 @@ class HistoryStore:
                     avg_daily = level_now / days_in
                     note_source = "cycle pace"
 
+                window_days = None
+                if elapsed_since_start is not None and days_left is not None:
+                    window_days = elapsed_since_start + days_left
+
                 # Confident enough to forecast an exhaustion date only once a
                 # meaningful slice of THIS window has actually been observed.
                 confident = True
-                if elapsed_since_start is not None and days_left is not None:
-                    window_days = elapsed_since_start + days_left
+                if elapsed_since_start is not None and window_days is not None:
                     warmup = max(_WARMUP_FLOOR_DAYS, window_days * _WARMUP_FRACTION)
                     confident = elapsed_since_start >= warmup
 
-                cycle_key = _cycle_end_key(cycle_end or snap.cycle_end)
+                cycle_end_ref = cycle_end or snap.cycle_end
                 series = [
                     s
                     for s in samples
@@ -335,11 +365,11 @@ class HistoryStore:
                     and _metric_level(s, metric.key) is not None
                 ]
                 series_is_same_cycle = False
-                if cycle_key is not None:
+                if cycle_end_ref is not None:
                     same_cycle = [
                         s
                         for s in series
-                        if _cycle_end_key(_metric_cycle_end(s, metric.key)) == cycle_key
+                        if _cycle_ends_match(_metric_cycle_end(s, metric.key), cycle_end_ref)
                     ]
                     if len(same_cycle) >= 2:
                         series = same_cycle
@@ -353,7 +383,10 @@ class HistoryStore:
                     v0 = _metric_level(first, metric.key) or 0.0
                     v1 = _metric_level(last, metric.key) or 0.0
                     delta = max(0.0, v1 - v0)
-                    if elapsed_days >= _MIN_ELAPSED_DAYS:
+                    min_elapsed = _MIN_ELAPSED_FLOOR_DAYS
+                    if window_days is not None:
+                        min_elapsed = max(_MIN_ELAPSED_FLOOR_DAYS, window_days * _MIN_ELAPSED_FRACTION)
+                    if elapsed_days >= min_elapsed:
                         hist_avg = delta / elapsed_days
                         # A cycle-pace built on a back-inferred start (no
                         # provider gives Claude a real one) algebraically

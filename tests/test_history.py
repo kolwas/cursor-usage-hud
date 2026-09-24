@@ -471,3 +471,85 @@ def test_two_samples_a_minute_apart_are_not_enough_of_a_trend(tmp_path):
 
     proj = _proj(store, snap, key="included")
     assert proj.rocketing is False
+
+
+# --------------------------------------------------------------------------- #
+# History-based avg_daily overriding the tautological cycle-pace estimate
+# --------------------------------------------------------------------------- #
+
+
+def _claude_five_hour_snap(*, now: datetime, cycle_end: datetime, used: float) -> ProviderSnapshot:
+    """No real cycle_start anywhere — mirrors Claude, which never reports
+    one for the 5h window either, forcing the percent-based backward
+    inference (see cycle.infer_cycle_start)."""
+    return ProviderSnapshot(
+        provider_id="anthropic",
+        title="Claude",
+        ok=True,
+        fetched_at=now,
+        metrics=[
+            Metric(
+                key="five_hour", label="5h", used=used, limit=100.0, unit="%",
+                percent_used=used, cycle_end=cycle_end,
+            )
+        ],
+    )
+
+
+def test_history_average_can_override_within_a_short_windows_own_lifetime(tmp_path):
+    """Regression: "-0d 0h 00m" forever on the 5h gauge. The history-based
+    average is supposed to override the tautological cycle-pace estimate
+    (built from a back-inferred cycle_start, which algebraically can only
+    ever agree with itself — see the comment in history.py) once there is
+    real same-cycle data to measure a rate from. The threshold for "enough
+    same-cycle data" used to be a flat 6 hours — longer than Claude's
+    entire 5h window can ever run for, so for that gauge the override could
+    never fire, not even once, and the ETA badge always read a fabricated
+    exact zero. 40 minutes of real same-cycle samples must be enough now.
+    """
+    store = HistoryStore(tmp_path / "history.json")
+    reset = NOW - timedelta(minutes=40)
+    cycle_end = reset + timedelta(hours=5)
+    store.record([_claude_five_hour_snap(now=reset, cycle_end=cycle_end, used=0.0)])
+    snap = _claude_five_hour_snap(now=NOW, cycle_end=cycle_end, used=38.0)
+    store.record([snap])
+
+    proj = _proj(store, snap, key="five_hour")
+    # A genuine climb this fast (0% to 38% in 40 minutes) is a real,
+    # non-tautological rate — the point isn't that it happens to be tame,
+    # it's that it isn't a suspiciously exact zero any more.
+    assert abs(proj.renewal_offset_days) > 1e-6
+    assert "history" in proj.note or proj.avg_daily > 50.0
+
+
+def test_a_re_estimated_cycle_end_does_not_orphan_earlier_same_cycle_history(tmp_path):
+    """Regression: infer_window_end's cycle_end estimate can legitimately
+    shift by hours between refreshes as more of the window's own log comes
+    into view (observed live: ~2h15m for a 7-day window) — comparing
+    cycle_end for EXACT equality treated that refinement as a brand-new
+    cycle, silently cutting the cycle's own earlier samples out of its own
+    history-based average and leaving only a sliver too short to ever
+    clear the elapsed-time threshold.
+    """
+    store = HistoryStore(tmp_path / "history.json")
+    cycle_start = NOW - timedelta(hours=40)
+    # An early, slightly-off estimate of when this 7-day cycle ends...
+    stale_estimate = cycle_start + timedelta(days=7) - timedelta(hours=2)
+    store.record(
+        [_claude_like_snap(now=cycle_start + timedelta(hours=1), cycle_end=stale_estimate, used=2.0)]
+    )
+    store.record(
+        [_claude_like_snap(now=cycle_start + timedelta(hours=20), cycle_end=stale_estimate, used=20.0)]
+    )
+    # ...refined closer to now, drifting by ~2 hours — still the SAME real
+    # cycle, not a new one (a real new cycle would be a full 7 days away).
+    refined_estimate = cycle_start + timedelta(days=7)
+    snap = _claude_like_snap(now=NOW, cycle_end=refined_estimate, used=29.0)
+    store.record([snap])
+
+    proj = _proj(store, snap, key="seven_day")
+    # With the 40-hour-old sample correctly still counted as same-cycle,
+    # the real rate is close to (29-2)/39h =~ 16.6%/day, not the
+    # tautological cycle-pace built from only the last few minutes.
+    assert proj.avg_daily < 30.0
+    assert abs(proj.renewal_offset_days) > 0.5
