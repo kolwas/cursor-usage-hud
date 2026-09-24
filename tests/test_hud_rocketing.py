@@ -119,3 +119,45 @@ def test_alarming_row_gets_a_whole_row_background_tint():
     assert WeatherPanel._CHIP_ALARM_BG in at_risk_html
     # Not confirmed yet — must not tint the whole row before it earns it.
     assert WeatherPanel._CHIP_ALARM_BG not in tentative_at_risk_html
+
+
+def test_alert_chart_appears_next_to_the_raven_only_when_something_is_hot(tmp_path):
+    """Requested: a small chart next to the raven when a gauge's pace is
+    genuinely alarming — visible (and widening the window for it, not
+    covering anything) only then, hidden the rest of the time."""
+    from usage_hud.history import HistoryStore
+    from usage_hud.ui.hud import WeatherPanel
+
+    snap, metric = _snap_and_metric()
+    snap.metrics.append(metric)
+    history = HistoryStore(tmp_path / "history.json")
+    now = utc_now()
+    history.record([snap])
+    snap2 = ProviderSnapshot(
+        provider_id="cursor", title="Cursor", ok=True, fetched_at=now + timedelta(minutes=5),
+        metrics=[Metric(key="included", label="Included", used=30, limit=100, unit="%", percent_used=30)],
+    )
+    history.record([snap2])
+
+    def _panel_for(proj: BurnProjection) -> WeatherPanel:
+        panel = WeatherPanel(history=history)
+        panel._snapshots = [snap]
+        panel._projections = [proj]
+        panel._render()
+        return panel
+
+    # isHidden() reflects the widget's own explicit show()/hide() call, not
+    # whether the (never-shown-in-this-test) top-level panel itself is on
+    # screen — isVisible() would be False either way here.
+    calm = _panel_for(_proj())
+    try:
+        assert calm._alert_chart.isHidden() is True
+    finally:
+        calm.deleteLater()
+
+    rocketing = _panel_for(_proj(rocketing=True))
+    try:
+        assert rocketing._alert_chart.isHidden() is False
+        assert rocketing._alert_chart.text() != ""
+    finally:
+        rocketing.deleteLater()

@@ -59,6 +59,12 @@ _RAVEN_BUSH_COLOR = QColor("#5c6b3f")
 # "alive" without competing for attention with the data next to it.
 _RAVEN_ANIM_MS = 260
 
+# The alarm chart that appears between the data and the raven when a gauge
+# is genuinely alarming — sized larger than a row's own inline bar (this is
+# a standalone panel, not squeezed into a table cell) but still small.
+_ALERT_CHART_WIDTH = 64
+_ALERT_CHART_HEIGHT = 26
+
 # Single-monitor flee: with nowhere else to jump to, the chip hides itself
 # instead — this is how far (px) the cursor can get before it's "nearby"
 # and the chip ducks out of the way, not just when directly touching it.
@@ -156,6 +162,17 @@ class WeatherPanel(QWidget):
         self._raven_mark.setText(self._raven_mark_html())
         self._raven_mark.setFixedSize(SCENE_WIDTH, SCENE_HEIGHT)
 
+        # A small extra chart that only shows up when some gauge is
+        # genuinely alarming (a real pace spike, or a confirmed — not
+        # tentative — risk of running out) — sits between the data and the
+        # raven, and the whole window widens to fit it rather than it
+        # covering anything (see _render's width calc and _hot_gauge).
+        self._alert_chart = QLabel()
+        self._alert_chart.setTextFormat(Qt.TextFormat.RichText)
+        self._alert_chart.setStyleSheet("background: transparent;")
+        self._alert_chart.setFixedSize(_ALERT_CHART_WIDTH, _ALERT_CHART_HEIGHT)
+        self._alert_chart.hide()
+
         content_col = QVBoxLayout()
         content_col.setSpacing(8)
         content_col.addWidget(self._chip)
@@ -165,6 +182,7 @@ class WeatherPanel(QWidget):
         layout.setContentsMargins(14, 8, 14, 8)
         layout.setSpacing(10)
         layout.addLayout(content_col, 1)
+        layout.addWidget(self._alert_chart, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(self._raven_mark, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.setMinimumWidth(200)
@@ -499,6 +517,20 @@ class WeatherPanel(QWidget):
         self._chip.setText(self._chip_html())
         if self._expanded:
             self._flyout.setText(self._flyout_html())
+
+        hot = self._hot_gauge()
+        alert_html = ""
+        if hot is not None:
+            snap, metric, proj = hot
+            alert_html = self._sparkline_html(
+                snap, metric, proj, width=_ALERT_CHART_WIDTH, height=_ALERT_CHART_HEIGHT
+            )
+        if alert_html:
+            self._alert_chart.setText(alert_html)
+            self._alert_chart.show()
+        else:
+            self._alert_chart.hide()
+
         self.adjustSize()
         if not self._expanded:
             # Chip is now one line per gauge, so its height grows with the
@@ -518,9 +550,16 @@ class WeatherPanel(QWidget):
             # raven scene beside the table (SCENE_WIDTH) plus the layout
             # spacing between it and the table — without it the window was
             # sized for the table alone and the mark got squeezed against
-            # the edge instead of sitting beside it.
+            # the edge instead of sitting beside it. +alert_mark does the
+            # same for the alarm chart when something is actually
+            # alarming — the window widens to make room for it rather than
+            # it covering the raven or anything else.
             side_mark = SCENE_WIDTH + 10
-            self.setFixedWidth(max(220, min(720, chip_hint.width() + 36 + side_mark)))
+            # isHidden(), not isVisible(): the latter also depends on the
+            # panel itself already being shown, which isn't guaranteed to
+            # have happened yet the first time _render() runs.
+            alert_mark = 0 if self._alert_chart.isHidden() else _ALERT_CHART_WIDTH + 10
+            self.setFixedWidth(max(220, min(720, chip_hint.width() + 36 + side_mark + alert_mark)))
         else:
             self.setMinimumHeight(0)
             self.setMaximumHeight(16777215)
@@ -637,10 +676,20 @@ class WeatherPanel(QWidget):
         )
 
     def _sparkline_html(
-        self, snap: ProviderSnapshot, metric: Metric, proj: BurnProjection | None
+        self,
+        snap: ProviderSnapshot,
+        metric: Metric,
+        proj: BurnProjection | None,
+        *,
+        width: int = 54,
+        height: int = 16,
     ) -> str:
-        """Flyout-only: the real observed % history for this gauge, with a
-        spike badge when today's pace triggered the "burning hot" alert."""
+        """The real observed % history for this gauge, with a spike badge
+        when today's pace triggered the "burning hot" alert. Used in the
+        flyout (default size) and as the chip's own alert chart (see
+        _hot_gauge/_render) when something is actually alarming, at a
+        slightly larger size since that one stands alone rather than
+        sitting next to explanatory text."""
         if self._history is None:
             return ""
         points = self._history.series(snap.provider_id, metric.key, max_points=40)
@@ -649,7 +698,28 @@ class WeatherPanel(QWidget):
         values = [v for _, v in points]
         color = QColor(_pct_color(metric.resolved_percent()))
         hot = bool(proj and proj.hot)
-        return mini_charts.sparkline_icon(values, color, hot=hot)
+        return mini_charts.sparkline_icon(values, color, hot=hot, width=width, height=height)
+
+    def _hot_gauge(self) -> tuple[ProviderSnapshot, Metric, BurnProjection] | None:
+        """The single most urgent currently-visible gauge, if any — a real
+        pace spike outranks a confirmed-but-steady exhaustion risk, which
+        outranks nothing at all. None when nothing is alarming, in which
+        case the chip's alert chart stays hidden (see _render)."""
+        proj_map = {(p.provider_id, p.metric_key): p for p in self._projections}
+        best: tuple[ProviderSnapshot, Metric, BurnProjection] | None = None
+        for snap in self._snapshots:
+            if not snap.ok:
+                continue
+            for metric in chip_metrics(snap):
+                proj = proj_map.get((snap.provider_id, metric.key))
+                if proj is None:
+                    continue
+                alarming = proj.rocketing or (proj.will_exhaust and proj.confident)
+                if not alarming:
+                    continue
+                if best is None or (proj.rocketing and not best[2].rocketing):
+                    best = (snap, metric, proj)
+        return best
 
     # Chip table columns: Label | Clock | Days | Hours | Minutes | Percent |
     # Usage bar | ETA-Days | ETA-Hours | ETA-Minutes. Every days/hours/minutes
