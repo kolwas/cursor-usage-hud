@@ -42,6 +42,21 @@ def chip_metric_tag(metric: Metric) -> str:
     return _CHIP_METRIC_TAG.get(metric.key, metric.label)
 
 
+_PROVIDER_TAG: dict[str, str] = {
+    "cursor": "Cur",
+    "copilot": "Cop",
+    "opencode-go": "Go",
+    "openai": "OAI",
+    "anthropic": "Cla",
+    "github": "GH",
+    "cloud": "Cld",
+}
+
+
+def provider_tag(provider_id: str) -> str:
+    return _PROVIDER_TAG.get(provider_id, provider_id[:3].title())
+
+
 def format_renewal_offset(days: float | None) -> str | None:
     """Signed offset vs renewal: −1d = exhaust a day before reset; +2d =
     trend lasts two days past it. Below a day this switches to h/m —

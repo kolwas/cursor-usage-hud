@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+from datetime import datetime
 
 from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import (
@@ -34,6 +35,7 @@ from usage_hud.ui.formatters import (
     format_renewal_offset,
     grouped_reset_etas,
     primary_eta_projection,
+    provider_tag,
     reset_eta_parts,
     reset_fraction_remaining,
 )
@@ -62,8 +64,12 @@ _RAVEN_ANIM_MS = 260
 # The alarm chart that appears between the data and the raven when a gauge
 # is genuinely alarming — sized larger than a row's own inline bar (this is
 # a standalone panel, not squeezed into a table cell) but still small.
-_ALERT_CHART_WIDTH = 64
-_ALERT_CHART_HEIGHT = 26
+# Total height stacks a label (which gauge), the sparkline itself, and a
+# time-span caption — a picture with no idea what it's a picture of wasn't
+# worth much next to the raven.
+_ALERT_CHART_WIDTH = 72
+_ALERT_SPARK_HEIGHT = 22
+_ALERT_CHART_HEIGHT = 46
 
 # Single-monitor flee: with nowhere else to jump to, the chip hides itself
 # instead — this is how far (px) the cursor can get before it's "nearby"
@@ -521,10 +527,7 @@ class WeatherPanel(QWidget):
         hot = self._hot_gauge()
         alert_html = ""
         if hot is not None:
-            snap, metric, proj = hot
-            alert_html = self._sparkline_html(
-                snap, metric, proj, width=_ALERT_CHART_WIDTH, height=_ALERT_CHART_HEIGHT
-            )
+            alert_html = self._alert_chart_html(*hot)
         if alert_html:
             self._alert_chart.setText(alert_html)
             self._alert_chart.show()
@@ -676,20 +679,10 @@ class WeatherPanel(QWidget):
         )
 
     def _sparkline_html(
-        self,
-        snap: ProviderSnapshot,
-        metric: Metric,
-        proj: BurnProjection | None,
-        *,
-        width: int = 54,
-        height: int = 16,
+        self, snap: ProviderSnapshot, metric: Metric, proj: BurnProjection | None
     ) -> str:
-        """The real observed % history for this gauge, with a spike badge
-        when today's pace triggered the "burning hot" alert. Used in the
-        flyout (default size) and as the chip's own alert chart (see
-        _hot_gauge/_render) when something is actually alarming, at a
-        slightly larger size since that one stands alone rather than
-        sitting next to explanatory text."""
+        """Flyout-only: the real observed % history for this gauge, with a
+        spike badge when today's pace triggered the "burning hot" alert."""
         if self._history is None:
             return ""
         points = self._history.series(snap.provider_id, metric.key, max_points=40)
@@ -698,7 +691,55 @@ class WeatherPanel(QWidget):
         values = [v for _, v in points]
         color = QColor(_pct_color(metric.resolved_percent()))
         hot = bool(proj and proj.hot)
-        return mini_charts.sparkline_icon(values, color, hot=hot, width=width, height=height)
+        return mini_charts.sparkline_icon(values, color, hot=hot)
+
+    @staticmethod
+    def _span_caption(points: list[tuple[datetime, float]]) -> str:
+        """A compact "how far back does this picture go" label — d7/2h15m
+        of history reads very differently from 40 points spanning 6
+        minutes, and the chart alone can't tell them apart."""
+        if len(points) < 2:
+            return ""
+        total_minutes = max(1, int((points[-1][0] - points[0][0]).total_seconds() // 60))
+        if total_minutes < 60:
+            return f"{total_minutes}m"
+        hours, minutes = divmod(total_minutes, 60)
+        if hours < 48:
+            return f"{hours}h{minutes:02d}m" if minutes else f"{hours}h"
+        days, hours = divmod(hours, 24)
+        return f"{days}d{hours}h" if hours else f"{days}d"
+
+    def _alert_chart_html(
+        self, snap: ProviderSnapshot, metric: Metric, proj: BurnProjection | None
+    ) -> str:
+        """The chip's own alarm chart (see _hot_gauge/_render): the real
+        observed history, same data as _sparkline_html, but captioned —
+        which gauge this is and how far back it goes — since a lone
+        picture with no idea what it's a picture of wasn't worth much
+        sitting next to the raven with nothing else to explain it."""
+        if self._history is None:
+            return ""
+        points = self._history.series(snap.provider_id, metric.key, max_points=40)
+        if len(points) < 2:
+            return ""
+        values = [v for _, v in points]
+        color = QColor(_pct_color(metric.resolved_percent()))
+        hot = bool(proj and proj.hot)
+        img = mini_charts.sparkline_icon(
+            values, color, hot=hot, width=_ALERT_CHART_WIDTH, height=_ALERT_SPARK_HEIGHT
+        )
+        label = f"{provider_tag(snap.provider_id)} {chip_metric_tag(metric)}"
+        span = self._span_caption(points)
+        # Each line its own <div>: an <img> is inline by default and
+        # otherwise flows next to the following text instead of stacking
+        # under the label the way the two text divs stack under each other.
+        return (
+            f'<div style="font-size:8px; color:#cbbf8f; text-align:center; '
+            f'white-space:nowrap;">{label}</div>'
+            f'<div style="text-align:center;">{img}</div>'
+            f'<div style="font-size:7px; color:#8a93a6; text-align:center; '
+            f'white-space:nowrap;">{span}</div>'
+        )
 
     def _hot_gauge(self) -> tuple[ProviderSnapshot, Metric, BurnProjection] | None:
         """The single most urgent currently-visible gauge, if any — a real

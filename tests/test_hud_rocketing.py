@@ -158,6 +158,25 @@ def test_alert_chart_appears_next_to_the_raven_only_when_something_is_hot(tmp_pa
     rocketing = _panel_for(_proj(rocketing=True))
     try:
         assert rocketing._alert_chart.isHidden() is False
-        assert rocketing._alert_chart.text() != ""
+        text = rocketing._alert_chart.text()
+        # Requested: a caption saying which gauge this is and how far back
+        # it goes — a lone picture with no label wasn't worth much.
+        assert "Cur" in text
+        assert "m</div>" in text or "h</div>" in text or "d</div>" in text
     finally:
         rocketing.deleteLater()
+
+
+def test_span_caption_formats_by_magnitude():
+    from usage_hud.ui.hud import WeatherPanel
+
+    def _points(minutes_span: float) -> list:
+        t0 = utc_now()
+        t1 = t0 + timedelta(minutes=minutes_span)
+        return [(t0, 1.0), (t1, 2.0)]
+
+    assert WeatherPanel._span_caption(_points(38)) == "38m"
+    assert WeatherPanel._span_caption(_points(135)) == "2h15m"
+    assert WeatherPanel._span_caption(_points(120)) == "2h"
+    assert WeatherPanel._span_caption(_points(60 * 50)) == "2d2h"
+    assert WeatherPanel._span_caption([]) == ""
