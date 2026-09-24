@@ -1,14 +1,21 @@
-"""The static branding emblem: a raven perched on a boar, in a military
-color palette — the app's own mascot (the raven, used everywhere else —
-see raven_glyph.py) plus the user's personal animal, "woven in" together
-per an explicit request, rather than either replacing the other.
+"""The app's animal glyphs: a raven perched on a boar (the app's own
+mascot plus the user's personal animal, "woven in" together per an
+explicit request, rather than either replacing the other), in a military
+color palette for the static branding icon.
 
-This is deliberately separate from raven_glyph.py: that module draws the
-LIVE status icon (tray, taskbar, chip window), which must stay a plain
-raven tinted by real-time severity color (green/amber/red) — a fixed
-military palette there would silently break that signal. This module is
-only for the STATIC app icon (tools/make_icon.py's output, przepiorka.ico/
-.png) — the identity mark, not a live indicator.
+Used two ways:
+
+* **Static app icon** (tools/make_icon.py's output, przepiorka.ico/.png,
+  Explorer/shortcuts) — the full boar+raven outline in a fixed military
+  palette (paint_emblem_outline).
+* **Live status icon** (tray, taskbar, chip window — ui/tray.py,
+  ui/formatters.py) — boar only, tinted by real-time severity color
+  (green/amber/red); see paint_emblem_solid. Only the boar: that icon
+  renders at real 16-24px tray/taskbar scale regardless of the source
+  pixmap's resolution, and two detailed shapes do not survive that scale
+  — the same reason the earlier solo-raven live icon already needed a
+  solid-silhouette fallback below SOLID_MAX_SIZE. The raven stays visible
+  on the static branding icon.
 """
 
 from __future__ import annotations
@@ -16,10 +23,12 @@ from __future__ import annotations
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 
-# Two creatures at 16-24px silhouette scale (the raven alone already needed
-# that fallback) reliably turns into a single grey smudge, not two animals —
-# so this module's solid fallback goes further up than raven_glyph's: only
-# the boar (the larger, simpler shape) below this size, both above it.
+# Two creatures at 16-24px silhouette scale reliably turns into a single
+# grey smudge, not two animals — so this module's solid fallback (used by
+# the static icon below this size) goes further up than a solo-shape
+# glyph would need: only the boar (the larger, simpler shape) below this
+# size, both above it. The live status icon always uses the solid boar
+# regardless of size — see the module docstring.
 SOLID_MAX_SIZE = 32
 
 

@@ -1,8 +1,8 @@
 """make_status_icon: the tray icon used to be a plain colored rounded square
-with no bird on it at all, unrelated to the raven taskbar/app icon — this
-covers the fix (both now paint from usage_hud.ui.raven_glyph) and the two
-behaviours that actually matter: the fill still tracks severity, and the
-urgent badge still shows up.
+with no animal on it at all, unrelated to the app's own mascot — this
+covers the fix (both now paint the boar from usage_hud.ui.emblem_glyph) and
+the two behaviours that actually matter: the fill still tracks severity,
+and the urgent badge still shows up.
 """
 
 import pytest
