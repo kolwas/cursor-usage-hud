@@ -66,10 +66,16 @@ _RAVEN_ANIM_MS = 260
 # a standalone panel, not squeezed into a table cell) but still small.
 # Total height stacks a label (which gauge), the sparkline itself, and a
 # time-span caption — a picture with no idea what it's a picture of wasn't
-# worth much next to the raven.
-_ALERT_CHART_WIDTH = 72
+# worth much next to the raven. The three stacked lines need more room than
+# their raw font-size pixels suggest (real line-height, not the number in
+# the CSS, plus Qt's own block spacing) — 46px clipped the bottom caption
+# clean off; the label/image line-heights below are sized generously
+# rather than trimmed to a guessed minimum a second time.
+_ALERT_CHART_WIDTH = 76
 _ALERT_SPARK_HEIGHT = 22
-_ALERT_CHART_HEIGHT = 46
+_ALERT_LABEL_LINE = 13
+_ALERT_SPAN_LINE = 12
+_ALERT_CHART_HEIGHT = _ALERT_LABEL_LINE + _ALERT_SPARK_HEIGHT + _ALERT_SPAN_LINE + 6
 
 # Single-monitor flee: with nowhere else to jump to, the chip hides itself
 # instead — this is how far (px) the cursor can get before it's "nearby"
@@ -733,12 +739,18 @@ class WeatherPanel(QWidget):
         # Each line its own <div>: an <img> is inline by default and
         # otherwise flows next to the following text instead of stacking
         # under the label the way the two text divs stack under each other.
+        # Explicit line-height + zero margin on every block: left to a
+        # guessed default, real font line-height (not the font-size number)
+        # plus Qt's own paragraph spacing added up to more than the widget's
+        # fixed height, which silently clipped the bottom caption off
+        # entirely rather than shrinking anything to fit.
         return (
-            f'<div style="font-size:8px; color:#cbbf8f; text-align:center; '
-            f'white-space:nowrap;">{label}</div>'
-            f'<div style="text-align:center;">{img}</div>'
-            f'<div style="font-size:7px; color:#8a93a6; text-align:center; '
-            f'white-space:nowrap;">{span}</div>'
+            f'<div style="margin:0; line-height:{_ALERT_LABEL_LINE}px; font-size:8px; '
+            f'color:#cbbf8f; text-align:center; white-space:nowrap;">{label}</div>'
+            f'<div style="margin:0; line-height:{_ALERT_SPARK_HEIGHT}px; '
+            f'text-align:center;">{img}</div>'
+            f'<div style="margin:0; line-height:{_ALERT_SPAN_LINE}px; font-size:7px; '
+            f'color:#8a93a6; text-align:center; white-space:nowrap;">{span}</div>'
         )
 
     def _hot_gauge(self) -> tuple[ProviderSnapshot, Metric, BurnProjection] | None:
