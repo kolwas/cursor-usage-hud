@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QAction, QColor, QCursor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
 from usage_hud.models import Alert, AlertLevel, BurnProjection, ProviderSnapshot
@@ -128,9 +128,13 @@ class TrayController:
         self._snooze_label = snooze_label
 
     def _activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
-        # Left / double / middle click → pinned details (does not flee).
-        if reason in {
-            QSystemTrayIcon.ActivationReason.Trigger,
+        # Left click → popup the menu (includes Quit). On Plasma the tray
+        # icon's right-click affordance is easy to miss / inconsistent, so
+        # Trigger must surface Quit without hunting for a context menu.
+        # Double / middle click still open pinned details directly.
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            self._menu.popup(QCursor.pos())
+        elif reason in {
             QSystemTrayIcon.ActivationReason.DoubleClick,
             QSystemTrayIcon.ActivationReason.MiddleClick,
         }:
@@ -138,27 +142,31 @@ class TrayController:
 
     def _rebuild_menu(self, snapshots: list[ProviderSnapshot]) -> None:
         self._menu.clear()
-        header = QAction("Subscriptions")
+        # Parent every QAction to the menu — unparented actions get GC'd by
+        # Python and silently vanish from the tray menu (Quit was the
+        # obvious casualty: Hide chip / Providers survived only because
+        # addMenu keeps a QMenu child alive).
+        header = QAction("Subscriptions", self._menu)
         header.setEnabled(False)
         self._menu.addAction(header)
         self._menu.addSeparator()
 
         proj_map = {(p.provider_id, p.metric_key): p for p in self._projections}
         if not snapshots:
-            empty = QAction("(waiting for data…)")
+            empty = QAction("(waiting for data…)", self._menu)
             empty.setEnabled(False)
             self._menu.addAction(empty)
         else:
             for snap in snapshots:
                 name = _provider_tag(snap.provider_id)
                 if not snap.ok:
-                    act = QAction(f"{name}: ERR — {snap.error[:40]}")
+                    act = QAction(f"{name}: ERR — {snap.error[:40]}", self._menu)
                     act.setEnabled(False)
                     self._menu.addAction(act)
                     continue
                 pct = snap.primary_percent()
                 pct_txt = f"{pct:.0f}%" if pct is not None else "—"
-                head = QAction(f"{name}: {pct_txt}")
+                head = QAction(f"{name}: {pct_txt}", self._menu)
                 head.setEnabled(False)
                 self._menu.addAction(head)
                 for metric in snap.metrics[:4]:
@@ -171,12 +179,12 @@ class TrayController:
                         eta = format_renewal_offset(proj.renewal_offset_days)
                         if eta:
                             line += f"  {eta}"
-                    row = QAction(line)
+                    row = QAction(line, self._menu)
                     row.setEnabled(False)
                     self._menu.addAction(row)
 
         self._menu.addSeparator()
-        act_details = QAction("Open details…")
+        act_details = QAction("Open details…", self._menu)
         act_details.triggered.connect(self._on_open_details)
         self._menu.addAction(act_details)
 
@@ -191,11 +199,11 @@ class TrayController:
                 act.triggered.connect(_make(minutes))
                 hide_menu.addAction(act)
         else:
-            show = QAction("Show chip")
+            show = QAction("Show chip", self._menu)
             show.triggered.connect(self._on_show_chip)
             self._menu.addAction(show)
             if self._snooze_label:
-                info = QAction(f"Hidden: {self._snooze_label}")
+                info = QAction(f"Hidden: {self._snooze_label}", self._menu)
                 info.setEnabled(False)
                 self._menu.addAction(info)
 
@@ -213,14 +221,14 @@ class TrayController:
             act.toggled.connect(_toggle)
             prov_menu.addAction(act)
 
-        act_refresh = QAction("Refresh")
+        act_refresh = QAction("Refresh", self._menu)
         act_refresh.triggered.connect(self._on_refresh)
         self._menu.addAction(act_refresh)
         if self._on_open_settings is not None:
-            act_settings = QAction("Settings…")
+            act_settings = QAction("Settings…", self._menu)
             act_settings.triggered.connect(self._on_open_settings)
             self._menu.addAction(act_settings)
-        act_quit = QAction("Quit")
+        act_quit = QAction("Quit", self._menu)
         act_quit.triggered.connect(self._on_quit)
         self._menu.addSeparator()
         self._menu.addAction(act_quit)

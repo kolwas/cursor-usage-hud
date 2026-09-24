@@ -74,7 +74,10 @@ _RAVEN_ANIM_MS = 260
 _ALERT_CHART_WIDTH = 110
 _ALERT_SPARK_HEIGHT = 40
 _ALERT_LABEL_LINE = 13
-_ALERT_SPAN_LINE = 12
+# Time-span under the spark (next to the raven) — must stay readable at a
+# glance; 7px/12px was too small once the chart sat beside the watermark.
+_ALERT_SPAN_LINE = 16
+_ALERT_SPAN_FONT_PX = 10
 _ALERT_CHART_HEIGHT = _ALERT_LABEL_LINE + _ALERT_SPARK_HEIGHT + _ALERT_SPAN_LINE + 6
 # How long each alarming gauge stays on screen before rotating to the next
 # one — long enough to actually read the chart, not a slideshow. A
@@ -824,7 +827,7 @@ class WeatherPanel(QWidget):
             f"{label}{offset_html}</div>"
             f'<div style="margin:0; line-height:{_ALERT_SPARK_HEIGHT}px; '
             f'text-align:center;">{img}</div>'
-            f'<div style="margin:0; line-height:{_ALERT_SPAN_LINE}px; font-size:7px; '
+            f'<div style="margin:0; line-height:{_ALERT_SPAN_LINE}px; font-size:{_ALERT_SPAN_FONT_PX}px; '
             f'color:#8a93a6; text-align:center; white-space:nowrap;">{span}</div>'
         )
 

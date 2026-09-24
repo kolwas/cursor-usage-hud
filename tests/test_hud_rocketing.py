@@ -163,6 +163,10 @@ def test_alert_chart_appears_next_to_the_raven_only_when_something_is_hot(tmp_pa
         # it goes — a lone picture with no label wasn't worth much.
         assert "Cur" in text
         assert "m</div>" in text or "h</div>" in text or "d</div>" in text
+        # Time-span caption under the spark must stay readable next to the raven.
+        from usage_hud.ui import hud as hud_mod
+
+        assert f"font-size:{hud_mod._ALERT_SPAN_FONT_PX}px" in text
     finally:
         rocketing.deleteLater()
 
