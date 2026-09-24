@@ -22,20 +22,20 @@ _LEG_B = ((16.5, 27.3), (17.7, 30.2))
 def raven_path(s: float, *, detailed: bool = True) -> QPainterPath:
     """One closed contour, side profile, facing right: rounded back, a
     strongly hooked beak (the "under-curl" right past the tip is what
-    reads as raptor/corvid rather than a generic songbird bill), a
-    shaggy-throat hackle, and a fanned tail — drawn on a 32x32 design grid
-    and scaled by ``s``.
+    reads as raptor/corvid rather than a generic songbird bill), a soft
+    throat hackle, and a single tail feather flick — drawn on a 32x32
+    design grid and scaled by ``s``.
 
-    ``detailed=False`` drops the throat zigzag and tail-feather notches in
-    favour of smooth curves: at small pixel sizes those fine notches are
-    thinner than a pixel and just turn into noise rather than detail.
+    ``detailed=False`` drops the throat notch and tail feather in favour
+    of smooth curves: at small pixel sizes those fine details are thinner
+    than a pixel and just turn into noise, not detail.
     """
     path = QPainterPath()
-    path.moveTo(3.0 * s, 18.0 * s)  # tail tip
-    # back, up and over the crown
-    path.quadTo(6.0 * s, 8.5 * s, 14.5 * s, 7.0 * s)
+    path.moveTo(3.5 * s, 19.0 * s)  # tail base
+    # back, up and over the crown — one smooth arch
+    path.quadTo(5.5 * s, 9.5 * s, 14.5 * s, 7.2 * s)
     # crown down to the base of the upper beak
-    path.quadTo(19.5 * s, 7.3 * s, 23.5 * s, 9.7 * s)
+    path.quadTo(19.5 * s, 7.4 * s, 23.5 * s, 9.7 * s)
     # upper beak out to the tip
     path.quadTo(27.5 * s, 10.8 * s, 30.5 * s, 13.2 * s)
     # the hook: curls back up under the tip before dropping to the chin —
@@ -43,20 +43,18 @@ def raven_path(s: float, *, detailed: bool = True) -> QPainterPath:
     path.quadTo(27.0 * s, 13.8 * s, 25.2 * s, 12.6 * s)
     path.lineTo(23.5 * s, 15.2 * s)  # chin
     if detailed:
-        # shaggy throat — two soft hackle bumps, not a jagged zigzag
-        path.quadTo(25.3 * s, 17.0 * s, 23.2 * s, 18.6 * s)
-        path.quadTo(24.8 * s, 20.2 * s, 22.0 * s, 21.6 * s)
+        # one soft hackle — a hint of a shaggy throat, not a jagged zigzag
+        path.quadTo(25.6 * s, 17.6 * s, 22.5 * s, 20.0 * s)
     else:
-        path.quadTo(24.2 * s, 18.4 * s, 21.0 * s, 21.6 * s)
-    # chest and belly
+        path.quadTo(24.6 * s, 17.8 * s, 21.5 * s, 20.2 * s)
+    # chest and belly, one continuous curve back toward the tail
     path.quadTo(18.0 * s, 27.3 * s, 12.0 * s, 27.7 * s)
-    path.quadTo(6.8 * s, 26.7 * s, 4.8 * s, 20.5 * s)
+    path.quadTo(6.8 * s, 26.9 * s, 4.6 * s, 20.2 * s)
     if detailed:
-        # tail fan: two feather notches, tucked under the back so they read
-        # as feathers rather than overlapping the belly curve
-        path.lineTo(7.0 * s, 19.3 * s)
-        path.lineTo(2.2 * s, 21.2 * s)
-        path.lineTo(5.6 * s, 17.6 * s)
+        # a single tail feather flick, not a self-crossing zigzag — the
+        # earlier two-notch fan doubled back across its own base and read
+        # as a stray mark rather than a feather.
+        path.lineTo(1.2 * s, 18.6 * s)
     path.closeSubpath()
     return path
 
