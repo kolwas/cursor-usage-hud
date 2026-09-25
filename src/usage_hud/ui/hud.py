@@ -803,9 +803,17 @@ class WeatherPanel(QWidget):
 
     def _hot_gauge(self) -> tuple[ProviderSnapshot, Metric, BurnProjection] | None:
         """The single most urgent currently-visible gauge, if any — a real
-        pace spike outranks a confirmed-but-steady exhaustion risk, which
-        outranks nothing at all. None when nothing is alarming, in which
-        case the chip's alert chart stays hidden (see _render)."""
+        pace spike outranks a confirmed-but-steady exhaustion risk; among
+        non-rocketing risks, the one closer to ACTUALLY hitting its cap
+        (days_to_exhaust) wins, not whichever gauge happened to be listed
+        first. That second part used to be a real bug: a 30-day gauge
+        reading "-12d" (already over budget, in relative terms) beat a 5h
+        gauge reading "-2h21m" (which will hit its cap in under an hour)
+        purely because it was iterated first and neither counted as
+        "rocketing" — a much less urgent problem silently starving a far
+        more urgent one of ever being shown. None when nothing is
+        alarming, in which case the chip's alert chart stays hidden (see
+        _render)."""
         proj_map = {(p.provider_id, p.metric_key): p for p in self._projections}
         best: tuple[ProviderSnapshot, Metric, BurnProjection] | None = None
         for snap in self._snapshots:
@@ -818,8 +826,19 @@ class WeatherPanel(QWidget):
                 alarming = proj.rocketing or (proj.will_exhaust and proj.confident)
                 if not alarming:
                     continue
-                if best is None or (proj.rocketing and not best[2].rocketing):
+                if best is None:
                     best = (snap, metric, proj)
+                    continue
+                best_proj = best[2]
+                if proj.rocketing and not best_proj.rocketing:
+                    best = (snap, metric, proj)
+                elif proj.rocketing == best_proj.rocketing:
+                    soon = proj.days_to_exhaust if proj.days_to_exhaust is not None else float("inf")
+                    best_soon = (
+                        best_proj.days_to_exhaust if best_proj.days_to_exhaust is not None else float("inf")
+                    )
+                    if soon < best_soon:
+                        best = (snap, metric, proj)
         return best
 
     # Chip table columns: Label | Clock | Days | Hours | Minutes | Percent |

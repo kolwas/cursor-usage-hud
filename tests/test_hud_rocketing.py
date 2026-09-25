@@ -180,3 +180,47 @@ def test_span_caption_formats_by_magnitude():
     assert WeatherPanel._span_caption(_points(120)) == "2h"
     assert WeatherPanel._span_caption(_points(60 * 50)) == "2d2h"
     assert WeatherPanel._span_caption([]) == ""
+
+
+def test_hot_gauge_prefers_the_soonest_real_exhaustion_not_iteration_order():
+    """Regression, live report: "Nie ma wykresu do cla 5h czemu?". Two
+    alarming, non-rocketing gauges — Cursor API confirmed over budget in
+    relative terms ("-12d" against a ~30-day cycle) and Claude 5h about to
+    actually hit its cap within the hour ("-2h21m" against a 5h cycle).
+    The 5h gauge is far more urgent in absolute time (days_to_exhaust ~0.03
+    vs ~4.4) but was losing every time purely because Cursor was iterated
+    first and neither counted as "rocketing" — the tie-break never
+    reconsidered after the first pick. days_to_exhaust must decide it.
+    """
+    from usage_hud.ui.hud import WeatherPanel
+
+    now = utc_now()
+    cursor_snap = ProviderSnapshot(
+        provider_id="cursor", title="Cursor", ok=True, fetched_at=now,
+        cycle_start=now - timedelta(days=15), cycle_end=now + timedelta(days=16),
+        metrics=[Metric(key="api", label="API", used=90, limit=100, unit="%", percent_used=90)],
+    )
+    claude_snap = ProviderSnapshot(
+        provider_id="anthropic", title="Claude", ok=True, fetched_at=now,
+        cycle_start=now - timedelta(hours=4), cycle_end=now + timedelta(minutes=8),
+        metrics=[Metric(key="five_hour", label="5h", used=95, limit=100, unit="%", percent_used=95)],
+    )
+    cursor_proj = _proj(
+        provider_id="cursor", metric_key="api", will_exhaust=True,
+        days_to_exhaust=4.45, renewal_offset_days=-11.53,
+    )
+    claude_proj = _proj(
+        provider_id="anthropic", metric_key="five_hour", will_exhaust=True,
+        days_to_exhaust=0.035, renewal_offset_days=-0.098,
+    )
+
+    panel = WeatherPanel()
+    # Cursor listed FIRST — the exact ordering that triggered the bug.
+    panel._snapshots = [cursor_snap, claude_snap]
+    panel._projections = [cursor_proj, claude_proj]
+    try:
+        hot = panel._hot_gauge()
+        assert hot is not None
+        assert (hot[0].provider_id, hot[1].key) == ("anthropic", "five_hour")
+    finally:
+        panel.deleteLater()
