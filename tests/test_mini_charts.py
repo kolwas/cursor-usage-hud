@@ -156,3 +156,41 @@ def test_exhaustion_flag_present_only_when_a_projection_exists():
     no_flag = mini_charts.burn_timeline_icon(0.5, None, QColor("#ff8a80"))
     with_flag = mini_charts.burn_timeline_icon(0.5, 0.6, QColor("#ff8a80"))
     assert no_flag != with_flag
+
+
+def test_forecast_icon_renders_with_and_without_a_trend():
+    mini_charts = _import_mini_charts()
+    values = [(0.0, 5.0), (0.5, 12.0), (1.0, 18.0)]
+    with_trend = mini_charts.forecast_icon(values, 5.0, 95.0, QColor("#ff8a80"))
+    no_trend = mini_charts.forecast_icon(values, 5.0, None, QColor("#ff8a80"))
+    assert with_trend.startswith('<img src="data:image/png;base64,')
+    assert no_trend.startswith('<img src="data:image/png;base64,')
+    assert with_trend != no_trend  # the trend line actually changes the picture
+
+
+def test_forecast_icon_too_little_data_is_distinct_from_a_real_chart():
+    mini_charts = _import_mini_charts()
+    empty = mini_charts.forecast_icon([], 5.0, None, QColor("#8ec8ff"))
+    one_point = mini_charts.forecast_icon([(0.0, 5.0)], 5.0, None, QColor("#8ec8ff"))
+    real = mini_charts.forecast_icon([(0.0, 5.0), (1.0, 10.0)], 5.0, None, QColor("#8ec8ff"))
+    assert empty == one_point  # both "not enough data" — same placeholder
+    assert empty != real
+
+
+def test_forecast_icon_zero_window_days_does_not_crash():
+    """A defensive guard, not a real scenario (the caller only builds this
+    chart once window_days is known to be positive) — must not divide by
+    zero if it's ever called with a degenerate window anyway."""
+    mini_charts = _import_mini_charts()
+    tag = mini_charts.forecast_icon([(0.0, 5.0), (1.0, 10.0)], 0.0, None, QColor("#8ec8ff"))
+    assert "data:image/png;base64," in tag
+
+
+def test_forecast_icon_overshoot_past_the_cap_does_not_crash():
+    """The whole point is to visualise a trend that blows past 100% — the
+    y-scale must expand to fit it rather than choke on it."""
+    mini_charts = _import_mini_charts()
+    tag = mini_charts.forecast_icon(
+        [(0.0, 10.0), (0.5, 60.0), (1.0, 95.0)], 2.0, 340.0, QColor("#ff8a80")
+    )
+    assert "data:image/png;base64," in tag

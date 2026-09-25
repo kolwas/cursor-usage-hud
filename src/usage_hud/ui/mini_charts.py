@@ -317,3 +317,107 @@ def sparkline_icon(
 
     painter.end()
     return _img_tag(_data_uri(pix), width, height)
+
+
+_LIMIT_LINE = QColor(255, 68, 68, 230)  # the red 100% cap line
+_TREND_LINE = QColor(255, 176, 32, 220)  # amber — a projection, not observed fact
+
+
+def forecast_icon(
+    values: list[tuple[float, float]],
+    window_days: float,
+    projected_value: float | None,
+    color: QColor,
+    *,
+    width: int = 76,
+    height: int = 26,
+) -> str:
+    """The alert chart's own picture, scaled to the WHOLE window, not just
+    however many samples happen to exist: the x-axis runs from the window's
+    own start to its own end (``window_days``, in days — the real observed
+    line only ever occupies the elapsed slice of that, the rest stays open
+    canvas), a dashed red line marks the 100% cap, and a straight amber
+    trend line continues from the last observed point out to where the
+    current pace would land BY the time the window ends (``projected_
+    value``) — so a burn rocketing towards the cap reads directly as "the
+    trend line crosses red before it reaches the right edge", not a number
+    to do the arithmetic on yourself.
+
+    ``values`` is (elapsed_days_since_window_start, percent_used), oldest
+    first — not the raw 0..100-normalised list ``sparkline_icon`` takes,
+    since this chart's y-axis is a fixed 0..headroom scale (so the cap line
+    and the trend line both mean something), not autoscaled to whatever the
+    data happens to span.
+    """
+    pix = QPixmap(width, height)
+    pix.fill(QColor(0, 0, 0, 0))
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(_PLATE)
+    painter.drawRoundedRect(0, 0, width, height, 3, 3)
+
+    if len(values) < 2 or window_days <= 0:
+        painter.setPen(_unknown_pen())
+        painter.drawLine(QPointF(2.0, height - 2.0), QPointF(width - 2.0, height - 2.0))
+        painter.end()
+        return _img_tag(_data_uri(pix), width, height)
+
+    # Headroom above 100% so a trend that overshoots the cap is still on
+    # the canvas instead of pinned to the top edge — the whole point is to
+    # SEE how far past red it goes, not just that it does.
+    candidates = [v for _, v in values] + [100.0]
+    if projected_value is not None:
+        candidates.append(projected_value)
+    y_max = max(candidates) * 1.08
+
+    pad = 2.0
+    plot_w = width - 2 * pad
+    plot_h = height - 2 * pad
+
+    def xpix(elapsed_days: float) -> float:
+        frac = max(0.0, min(1.0, elapsed_days / window_days))
+        return pad + plot_w * frac
+
+    def ypix(pct: float) -> float:
+        frac = max(0.0, pct / y_max)
+        return pad + plot_h * (1.0 - min(frac, 1.0))
+
+    # The 100% cap, dashed red, spanning the whole window width — not just
+    # the observed slice — so it reads as a fixed ceiling the chart is
+    # measured against, not something tied to how much data exists yet.
+    cap_pen = QPen(_LIMIT_LINE)
+    cap_pen.setWidthF(1.0)
+    cap_pen.setStyle(Qt.PenStyle.DashLine)
+    painter.setPen(cap_pen)
+    y100 = ypix(100.0)
+    painter.drawLine(QPointF(pad, y100), QPointF(width - pad, y100))
+
+    pts = [QPointF(xpix(d), ypix(v)) for d, v in values]
+    pen = QPen(color)
+    pen.setWidthF(1.4)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    for a, b in zip(pts, pts[1:]):
+        painter.drawLine(a, b)
+
+    # "Now" — the last observed sample, not the end of the canvas (which is
+    # the window's own end, usually still empty space to the right of it).
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(_DOT_HALO)
+    painter.drawEllipse(pts[-1], 2.2, 2.2)
+    painter.setBrush(color)
+    painter.drawEllipse(pts[-1], 1.4, 1.4)
+
+    if projected_value is not None:
+        trend_pen = QPen(_TREND_LINE)
+        trend_pen.setWidthF(1.1)
+        trend_pen.setStyle(Qt.PenStyle.DashLine)
+        painter.setPen(trend_pen)
+        end_pt = QPointF(xpix(window_days), ypix(projected_value))
+        painter.drawLine(pts[-1], end_pt)
+
+    painter.end()
+    return _img_tag(_data_uri(pix), width, height)

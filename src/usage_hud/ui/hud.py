@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import (
@@ -21,7 +21,7 @@ from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QMenu, QVBoxLay
 
 from usage_hud.branding import APP_NAME
 from usage_hud.history import HistoryStore
-from usage_hud.models import Alert, AlertLevel, BurnProjection, Metric, ProviderSnapshot
+from usage_hud.models import Alert, AlertLevel, BurnProjection, Metric, ProviderSnapshot, utc_now
 from usage_hud.ui import mini_charts
 from usage_hud.ui.display import idle_screen, next_screen_after, screen_under_cursor
 from usage_hud.ui.formatters import (
@@ -718,24 +718,59 @@ class WeatherPanel(QWidget):
     def _alert_chart_html(
         self, snap: ProviderSnapshot, metric: Metric, proj: BurnProjection | None
     ) -> str:
-        """The chip's own alarm chart (see _hot_gauge/_render): the real
-        observed history, same data as _sparkline_html, but captioned —
-        which gauge this is and how far back it goes — since a lone
-        picture with no idea what it's a picture of wasn't worth much
-        sitting next to the raven with nothing else to explain it."""
+        """The chip's own alarm chart (see _hot_gauge/_render): scaled to
+        the WHOLE window, not just however much history happens to exist —
+        the observed line occupies only the elapsed slice, a dashed red
+        line marks the 100% cap, and a straight amber trend line continues
+        from "now" out to where the current pace lands by the time the
+        window ends (mini_charts.forecast_icon) — so a burn heading for the
+        cap reads directly as the trend crossing red, not a number to work
+        out yourself. Falls back to the plain observed-only sparkline when
+        the window's own span isn't known (should not normally happen for
+        anything _hot_gauge selects, but a chart that degrades gracefully
+        beats one that silently disappears)."""
         if self._history is None:
             return ""
-        points = self._history.series(snap.provider_id, metric.key, max_points=40)
+
+        color = QColor(_pct_color(metric.resolved_percent()))
+        label = f"{provider_tag(snap.provider_id)} {chip_metric_tag(metric)}"
+
+        # history.series() is not same-cycle-scoped the way projections()
+        # is — asked for unscoped, it happily hands back a previous cycle's
+        # tail too (5h resets often, so most of an 8-day retention window
+        # is a DIFFERENT cycle). Passing `since=` this cycle's own inferred
+        # start keeps the chart to what actually belongs on its timeline,
+        # instead of old, unrelated-cycle samples all piling up at x=0.
+        window_days: float | None = None
+        cycle_start = None
+        if proj is not None and proj.days_elapsed is not None and proj.days_left is not None:
+            now = utc_now()
+            window_days = proj.days_elapsed + proj.days_left
+            if window_days > 0:
+                cycle_start = now - timedelta(days=proj.days_elapsed)
+
+        points = self._history.series(snap.provider_id, metric.key, since=cycle_start, max_points=40)
         if len(points) < 2:
             return ""
-        values = [v for _, v in points]
-        color = QColor(_pct_color(metric.resolved_percent()))
-        hot = bool(proj and proj.hot)
-        img = mini_charts.sparkline_icon(
-            values, color, hot=hot, width=_ALERT_CHART_WIDTH, height=_ALERT_SPARK_HEIGHT
-        )
-        label = f"{provider_tag(snap.provider_id)} {chip_metric_tag(metric)}"
         span = self._span_caption(points)
+
+        img = ""
+        if window_days is not None and window_days > 0:
+            now = utc_now()
+            values = [(proj.days_elapsed - (now - ts).total_seconds() / 86400.0, v) for ts, v in points]
+            img = mini_charts.forecast_icon(
+                values,
+                window_days,
+                proj.projected_cycle_end,
+                color,
+                width=_ALERT_CHART_WIDTH,
+                height=_ALERT_SPARK_HEIGHT,
+            )
+        if not img:
+            hot = bool(proj and proj.hot)
+            img = mini_charts.sparkline_icon(
+                [v for _, v in points], color, hot=hot, width=_ALERT_CHART_WIDTH, height=_ALERT_SPARK_HEIGHT
+            )
         # Each line its own <div>: an <img> is inline by default and
         # otherwise flows next to the following text instead of stacking
         # under the label the way the two text divs stack under each other.
