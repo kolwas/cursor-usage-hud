@@ -329,6 +329,7 @@ def forecast_icon(
     projected_value: float | None,
     color: QColor,
     *,
+    rocketing: bool = False,
     width: int = 76,
     height: int = 26,
 ) -> str:
@@ -348,6 +349,12 @@ def forecast_icon(
     since this chart's y-axis is a fixed 0..headroom scale (so the cap line
     and the trend line both mean something), not autoscaled to whatever the
     data happens to span.
+
+    ``rocketing=True`` (a real pace spike happening right now, not just a
+    steady confirmed risk) rings the whole plate in a bright red border —
+    "mocniej eksponowane": the one gauge actually spiking right now should
+    look more urgent than one merely on track to run out eventually, not
+    just get equal billing in the same cycling chart.
     """
     pix = QPixmap(width, height)
     pix.fill(QColor(0, 0, 0, 0))
@@ -357,6 +364,13 @@ def forecast_icon(
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(_PLATE)
     painter.drawRoundedRect(0, 0, width, height, 3, 3)
+
+    if rocketing:
+        ring_pen = QPen(_HOT)
+        ring_pen.setWidthF(1.6)
+        painter.setPen(ring_pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(1, 1, width - 2, height - 2, 3, 3)
 
     if len(values) < 2 or window_days <= 0:
         painter.setPen(_unknown_pen())

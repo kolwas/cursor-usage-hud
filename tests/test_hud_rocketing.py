@@ -219,8 +219,127 @@ def test_hot_gauge_prefers_the_soonest_real_exhaustion_not_iteration_order():
     panel._snapshots = [cursor_snap, claude_snap]
     panel._projections = [cursor_proj, claude_proj]
     try:
-        hot = panel._hot_gauge()
-        assert hot is not None
-        assert (hot[0].provider_id, hot[1].key) == ("anthropic", "five_hour")
+        gauges = panel._hot_gauges()
+        assert gauges
+        assert (gauges[0][0].provider_id, gauges[0][1].key) == ("anthropic", "five_hour")
+        # Both are alarming — both belong in the cycle, not just the winner.
+        assert len(gauges) == 2
     finally:
         panel.deleteLater()
+
+
+def _two_hot_snapshots():
+    """Two distinct, simultaneously-alarming gauges — the fixture the
+    cycling tests below share."""
+    now = utc_now()
+    cursor_snap = ProviderSnapshot(
+        provider_id="cursor", title="Cursor", ok=True, fetched_at=now,
+        cycle_start=now - timedelta(days=15), cycle_end=now + timedelta(days=16),
+        metrics=[Metric(key="api", label="API", used=90, limit=100, unit="%", percent_used=90)],
+    )
+    claude_snap = ProviderSnapshot(
+        provider_id="anthropic", title="Claude", ok=True, fetched_at=now,
+        cycle_start=now - timedelta(hours=4), cycle_end=now + timedelta(minutes=8),
+        metrics=[Metric(key="five_hour", label="5h", used=95, limit=100, unit="%", percent_used=95)],
+    )
+    cursor_proj = _proj(
+        provider_id="cursor", metric_key="api", will_exhaust=True,
+        days_to_exhaust=4.45, renewal_offset_days=-11.53,
+    )
+    claude_proj = _proj(
+        provider_id="anthropic", metric_key="five_hour", will_exhaust=True,
+        days_to_exhaust=0.035, renewal_offset_days=-0.098,
+    )
+    return [cursor_snap, claude_snap], [cursor_proj, claude_proj]
+
+
+def test_alert_cycle_rotates_through_every_alarming_gauge_and_wraps(tmp_path):
+    """Requested: "Zagrozone powinny pokazywac" — more than one alarming
+    gauge must actually get shown, not just the single worst one. Ticking
+    the cycle must advance through all of them and wrap back to the start,
+    and must nudge the raven (see _tick_raven_mark's jump mode) as the
+    swap happens rather than silently changing the picture underneath it.
+
+    Needs a real HistoryStore with actual samples: _render()'s "nothing to
+    show" branch resets the cycle index back to 0, which is correct
+    behaviour on its own but would mask the index ever advancing in a test
+    with no history to chart (_alert_chart_html always returns "" then).
+    """
+    import dataclasses
+
+    from usage_hud.history import HistoryStore
+    from usage_hud.ui.hud import WeatherPanel
+
+    snapshots, projections = _two_hot_snapshots()
+    history = HistoryStore(tmp_path / "history.json")
+    for snap in snapshots:
+        # Two samples each, a few minutes apart — _alert_chart_html needs
+        # at least 2 points of real history to draw anything at all.
+        history.record([dataclasses.replace(snap, fetched_at=snap.fetched_at - timedelta(minutes=5))])
+        history.record([snap])
+
+    panel = WeatherPanel(history=history)
+    panel._snapshots = snapshots
+    panel._projections = projections
+    try:
+        assert panel._alert_cycle_index == 0
+        panel._tick_alert_cycle()
+        assert panel._alert_cycle_index == 1
+        assert panel._raven_mode == "jump"  # the swap-flourish fired
+        panel._tick_alert_cycle()
+        assert panel._alert_cycle_index == 0  # wrapped back around
+    finally:
+        panel.deleteLater()
+
+
+def test_alert_cycle_is_a_no_op_with_at_most_one_alarming_gauge():
+    from usage_hud.ui.hud import WeatherPanel
+
+    panel = WeatherPanel()
+    panel._snapshots = []
+    panel._projections = []
+    try:
+        panel._raven_mode = "walk"
+        panel._tick_alert_cycle()
+        assert panel._alert_cycle_index == 0
+        assert panel._raven_mode == "walk"  # no swap happened, no flourish
+    finally:
+        panel.deleteLater()
+
+
+def test_rocketing_gauge_gets_a_longer_turn_and_a_visible_ring():
+    """Requested: "te problematyczne z rocket powiny byc mocniej
+    eksponowane" — a rocketing gauge must both get more time on screen
+    per turn than a steady confirmed risk, and render visibly differently
+    (a red ring around the chart), not just equal billing."""
+    from PySide6.QtGui import QColor
+
+    from usage_hud.ui import mini_charts
+    from usage_hud.ui.hud import WeatherPanel, _ALERT_CYCLE_HOT_MS, _ALERT_CYCLE_MS
+
+    snap, metric = _snap_and_metric()
+    snap.metrics.append(metric)
+
+    steady = WeatherPanel()
+    try:
+        steady._snapshots = [snap]
+        steady._projections = [_proj(will_exhaust=True, confident=True, rocketing=False)]
+        steady._render()
+        assert steady._alert_cycle_timer.interval() == _ALERT_CYCLE_MS
+    finally:
+        steady.deleteLater()
+
+    spiking = WeatherPanel()
+    try:
+        spiking._snapshots = [snap]
+        spiking._projections = [_proj(rocketing=True)]
+        spiking._render()
+        assert spiking._alert_cycle_timer.interval() == _ALERT_CYCLE_HOT_MS
+    finally:
+        spiking.deleteLater()
+
+    calm_chart = mini_charts.forecast_icon([(0.0, 5.0), (1.0, 10.0)], 5.0, 20.0, QColor("#5ddea0"))
+    hot_chart = mini_charts.forecast_icon(
+        [(0.0, 5.0), (1.0, 10.0)], 5.0, 20.0, QColor("#5ddea0"), rocketing=True
+    )
+    assert calm_chart != hot_chart

@@ -76,6 +76,12 @@ _ALERT_SPARK_HEIGHT = 40
 _ALERT_LABEL_LINE = 13
 _ALERT_SPAN_LINE = 12
 _ALERT_CHART_HEIGHT = _ALERT_LABEL_LINE + _ALERT_SPARK_HEIGHT + _ALERT_SPAN_LINE + 6
+# How long each alarming gauge stays on screen before rotating to the next
+# one — long enough to actually read the chart, not a slideshow. A
+# rocketing spike gets noticeably longer ("mocniej eksponowane") than a
+# steady confirmed risk, since it's the one actually happening right now.
+_ALERT_CYCLE_MS = 4500
+_ALERT_CYCLE_HOT_MS = 8000
 
 # Single-monitor flee: with nowhere else to jump to, the chip hides itself
 # instead — this is how far (px) the cursor can get before it's "nearby"
@@ -178,7 +184,11 @@ class WeatherPanel(QWidget):
         # genuinely alarming (a real pace spike, or a confirmed — not
         # tentative — risk of running out) — sits between the data and the
         # raven, and the whole window widens to fit it rather than it
-        # covering anything (see _render's width calc and _hot_gauge).
+        # covering anything (see _render's width calc and _hot_gauges).
+        # More than one gauge can be alarming at once, so this cycles
+        # through all of them one at a time (see _tick_alert_cycle) rather
+        # than picking a single "worst" one and hiding the rest.
+        self._alert_cycle_index = 0
         self._alert_chart = QLabel()
         self._alert_chart.setTextFormat(Qt.TextFormat.RichText)
         self._alert_chart.setStyleSheet("background: transparent;")
@@ -224,6 +234,15 @@ class WeatherPanel(QWidget):
         self._raven_anim_timer.setInterval(_RAVEN_ANIM_MS)
         self._raven_anim_timer.timeout.connect(self._tick_raven_mark)
         self._raven_anim_timer.start()
+
+        # Rotates the alert chart through every currently-alarming gauge
+        # (a no-op when there's 0 or 1 — see _tick_alert_cycle) — its own
+        # timer, independent of the data refresh, so it advances at a
+        # readable pace regardless of how often app.py actually refetches.
+        self._alert_cycle_timer = QTimer(self)
+        self._alert_cycle_timer.setInterval(_ALERT_CYCLE_MS)
+        self._alert_cycle_timer.timeout.connect(self._tick_alert_cycle)
+        self._alert_cycle_timer.start()
 
     def _raven_mark_html(self) -> str:
         if self._raven_mode == "jump":
@@ -530,14 +549,21 @@ class WeatherPanel(QWidget):
         if self._expanded:
             self._flyout.setText(self._flyout_html())
 
-        hot = self._hot_gauge()
+        gauges = self._hot_gauges()
         alert_html = ""
-        if hot is not None:
-            alert_html = self._alert_chart_html(*hot)
+        if gauges:
+            current = gauges[self._alert_cycle_index % len(gauges)]
+            alert_html = self._alert_chart_html(*current)
+            # A rocketing spike (happening right now) gets more time on
+            # screen than a steady confirmed risk — "mocniej eksponowane".
+            self._alert_cycle_timer.setInterval(
+                _ALERT_CYCLE_HOT_MS if current[2].rocketing else _ALERT_CYCLE_MS
+            )
         if alert_html:
             self._alert_chart.setText(alert_html)
             self._alert_chart.show()
         else:
+            self._alert_cycle_index = 0
             self._alert_chart.hide()
 
         self.adjustSize()
@@ -718,7 +744,7 @@ class WeatherPanel(QWidget):
     def _alert_chart_html(
         self, snap: ProviderSnapshot, metric: Metric, proj: BurnProjection | None
     ) -> str:
-        """The chip's own alarm chart (see _hot_gauge/_render): scaled to
+        """The chip's own alarm chart (see _hot_gauges/_render): scaled to
         the WHOLE window, not just however much history happens to exist —
         the observed line occupies only the elapsed slice, a dashed red
         line marks the 100% cap, and a straight amber trend line continues
@@ -727,7 +753,7 @@ class WeatherPanel(QWidget):
         cap reads directly as the trend crossing red, not a number to work
         out yourself. Falls back to the plain observed-only sparkline when
         the window's own span isn't known (should not normally happen for
-        anything _hot_gauge selects, but a chart that degrades gracefully
+        anything _hot_gauges selects, but a chart that degrades gracefully
         beats one that silently disappears)."""
         if self._history is None:
             return ""
@@ -775,6 +801,7 @@ class WeatherPanel(QWidget):
                 window_days,
                 proj.projected_cycle_end,
                 color,
+                rocketing=bool(proj.rocketing),
                 width=_ALERT_CHART_WIDTH,
                 height=_ALERT_SPARK_HEIGHT,
             )
@@ -801,21 +828,26 @@ class WeatherPanel(QWidget):
             f'color:#8a93a6; text-align:center; white-space:nowrap;">{span}</div>'
         )
 
-    def _hot_gauge(self) -> tuple[ProviderSnapshot, Metric, BurnProjection] | None:
-        """The single most urgent currently-visible gauge, if any — a real
-        pace spike outranks a confirmed-but-steady exhaustion risk; among
-        non-rocketing risks, the one closer to ACTUALLY hitting its cap
-        (days_to_exhaust) wins, not whichever gauge happened to be listed
-        first. That second part used to be a real bug: a 30-day gauge
-        reading "-12d" (already over budget, in relative terms) beat a 5h
-        gauge reading "-2h21m" (which will hit its cap in under an hour)
-        purely because it was iterated first and neither counted as
-        "rocketing" — a much less urgent problem silently starving a far
-        more urgent one of ever being shown. None when nothing is
-        alarming, in which case the chip's alert chart stays hidden (see
-        _render)."""
+    def _hot_gauges(self) -> list[tuple[ProviderSnapshot, Metric, BurnProjection]]:
+        """Every currently-alarming gauge — a real pace spike (rocketing),
+        or a confirmed (not tentative) risk of running out — most urgent
+        first: rocketing beats a steady risk outright, and among
+        non-rocketing risks the one closer to ACTUALLY hitting its cap
+        (days_to_exhaust) beats one that's merely over budget by a bigger
+        RELATIVE margin against a much longer cycle (a 30-day gauge
+        reading "-12d" vs a 5h gauge reading "-2h21m" — the second one
+        happens first in real time despite the smaller-looking number).
+
+        More than one gauge can be alarming at once ("Zagrozone powinny
+        pokazywac"), so this returns all of them — the chip's alert chart
+        cycles through the list (see _render/_tick_alert_cycle) instead of
+        picking a single "worst" one and hiding the rest. Rocketing gauges
+        get more time on screen per turn ("mocniej eksponowane") via
+        _render's cycle-interval choice, not by appearing more than once
+        in this list.
+        """
         proj_map = {(p.provider_id, p.metric_key): p for p in self._projections}
-        best: tuple[ProviderSnapshot, Metric, BurnProjection] | None = None
+        found: list[tuple[ProviderSnapshot, Metric, BurnProjection]] = []
         for snap in self._snapshots:
             if not snap.ok:
                 continue
@@ -823,23 +855,27 @@ class WeatherPanel(QWidget):
                 proj = proj_map.get((snap.provider_id, metric.key))
                 if proj is None:
                     continue
-                alarming = proj.rocketing or (proj.will_exhaust and proj.confident)
-                if not alarming:
-                    continue
-                if best is None:
-                    best = (snap, metric, proj)
-                    continue
-                best_proj = best[2]
-                if proj.rocketing and not best_proj.rocketing:
-                    best = (snap, metric, proj)
-                elif proj.rocketing == best_proj.rocketing:
-                    soon = proj.days_to_exhaust if proj.days_to_exhaust is not None else float("inf")
-                    best_soon = (
-                        best_proj.days_to_exhaust if best_proj.days_to_exhaust is not None else float("inf")
-                    )
-                    if soon < best_soon:
-                        best = (snap, metric, proj)
-        return best
+                if proj.rocketing or (proj.will_exhaust and proj.confident):
+                    found.append((snap, metric, proj))
+
+        def sort_key(item: tuple[ProviderSnapshot, Metric, BurnProjection]) -> tuple[int, float]:
+            proj = item[2]
+            soon = proj.days_to_exhaust if proj.days_to_exhaust is not None else float("inf")
+            return (0 if proj.rocketing else 1, soon)
+
+        found.sort(key=sort_key)
+        return found
+
+    def _tick_alert_cycle(self) -> None:
+        gauges = self._hot_gauges()
+        if len(gauges) > 1:
+            self._alert_cycle_index = (self._alert_cycle_index + 1) % len(gauges)
+            # A quick, eye-catching flourish on the swap — the raven
+            # notices the chart changing, rather than it just silently
+            # jumping to a different gauge.
+            self._raven_mode = "jump"
+            self._raven_jump_frame = 0
+        self._render()
 
     # Chip table columns: Label | Clock | Days | Hours | Minutes | Percent |
     # Usage bar | ETA-Days | ETA-Hours | ETA-Minutes. Every days/hours/minutes
