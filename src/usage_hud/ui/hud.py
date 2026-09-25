@@ -754,6 +754,18 @@ class WeatherPanel(QWidget):
             return ""
         span = self._span_caption(points)
 
+        # The number the whole chart exists to answer — "by how much" —
+        # printed as plain horizontal text next to the label rather than
+        # left for someone to read off where the trend crosses the cap.
+        offset_html = ""
+        if proj is not None and proj.renewal_offset_days is not None:
+            offset_text = format_renewal_offset(proj.renewal_offset_days)
+            if offset_text:
+                offset_color = _ETA_COLOR.get(
+                    eta_severity(proj.renewal_offset_days) if proj.confident else "tentative", "#8ec8ff"
+                )
+                offset_html = f' <span style="color:{offset_color};">{offset_text}</span>'
+
         img = ""
         if window_days is not None and window_days > 0:
             now = utc_now()
@@ -781,7 +793,8 @@ class WeatherPanel(QWidget):
         # entirely rather than shrinking anything to fit.
         return (
             f'<div style="margin:0; line-height:{_ALERT_LABEL_LINE}px; font-size:8px; '
-            f'color:#cbbf8f; text-align:center; white-space:nowrap;">{label}</div>'
+            f'color:#cbbf8f; text-align:center; white-space:nowrap; font-weight:600;">'
+            f"{label}{offset_html}</div>"
             f'<div style="margin:0; line-height:{_ALERT_SPARK_HEIGHT}px; '
             f'text-align:center;">{img}</div>'
             f'<div style="margin:0; line-height:{_ALERT_SPAN_LINE}px; font-size:7px; '
