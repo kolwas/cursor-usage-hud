@@ -1,10 +1,13 @@
 """mini_charts needs a QApplication (QPixmap/QPainter) — skip cleanly without one."""
 
+import base64
+import re
+
 import pytest
 
 PySide6 = pytest.importorskip("PySide6")
 
-from PySide6.QtGui import QColor  # noqa: E402
+from PySide6.QtGui import QColor, QImage  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 
@@ -194,3 +197,98 @@ def test_forecast_icon_overshoot_past_the_cap_does_not_crash():
         [(0.0, 10.0), (0.5, 60.0), (1.0, 95.0)], 2.0, 340.0, QColor("#ff8a80")
     )
     assert "data:image/png;base64," in tag
+
+
+def _decode(img_tag: str) -> QImage:
+    b64 = re.search(r'base64,([^"]+)', img_tag).group(1)
+    img = QImage()
+    img.loadFromData(base64.b64decode(b64))
+    return img
+
+
+def _has_pixel_near(img: QImage, cx: float, cy: float, wants: str, radius: int = 2) -> bool:
+    """Is there a pixel within ``radius`` of (cx, cy) whose dominant channel
+    matches ``wants`` ("red"/"green"/"amber")? Antialiasing and dashed
+    lines mean a single exact pixel is not a reliable sample; a small
+    neighbourhood scan is what the eye actually does looking at the chart.
+    """
+    w, h = img.width(), img.height()
+    for y in range(max(0, int(cy) - radius), min(h, int(cy) + radius + 1)):
+        for x in range(max(0, int(cx) - radius), min(w, int(cx) + radius + 1)):
+            c = img.pixelColor(x, y)
+            r, g, b = c.red(), c.green(), c.blue()
+            if wants == "red" and r > 150 and r > g + 60 and r > b + 60:
+                return True
+            if wants == "green" and g > 150 and g > r + 30 and g > b + 20:
+                return True
+            if wants == "amber" and r > 150 and 60 < g < 200 and b < 80:
+                return True
+    return False
+
+
+def test_forecast_icon_draws_the_cap_line_at_exactly_100_percent():
+    """Pixel-level check, not a visual eyeball: for known values (not noisy
+    live data, so the expected geometry can be computed by hand), is the
+    red 100% line actually AT the y that the documented formula says it
+    should be — not just "a red line exists somewhere"."""
+    mini_charts = _import_mini_charts()
+    width, height = 110, 40
+    tag = mini_charts.forecast_icon(
+        [(0.0, 0.0), (1.0, 50.0)], 5.0, 100.0, QColor("#5ddea0"), width=width, height=height
+    )
+    img = _decode(tag)
+
+    y_max = max(0.0, 50.0, 100.0) * 1.08
+    pad, plot_h = 2.0, height - 4.0
+    y100 = pad + plot_h * (1.0 - min(100.0 / y_max, 1.0))
+    assert _has_pixel_near(img, width / 2, y100, "red")
+
+
+def test_forecast_icon_trend_line_passes_through_the_interpolated_point():
+    """The trend line must be an actual straight line from "now" to the
+    projected value at the window's own end — checked by sampling the
+    midpoint of that segment, not just "an amber pixel exists"."""
+    mini_charts = _import_mini_charts()
+    width, height = 110, 40
+    values = [(0.0, 0.0), (1.0, 50.0)]
+    window_days = 5.0
+    projected_value = 100.0  # straight line from (1, 50) to (5, 100)
+    tag = mini_charts.forecast_icon(
+        values, window_days, projected_value, QColor("#5ddea0"), width=width, height=height
+    )
+    img = _decode(tag)
+
+    y_max = max(0.0, 50.0, 100.0) * 1.08
+    pad = 2.0
+    plot_w, plot_h = width - 4.0, height - 4.0
+
+    def xpix(d: float) -> float:
+        return pad + plot_w * max(0.0, min(1.0, d / window_days))
+
+    def ypix(v: float) -> float:
+        return pad + plot_h * (1.0 - min(max(0.0, v / y_max), 1.0))
+
+    # Halfway from "now" (elapsed=1, 50%) to the window's end (elapsed=5,
+    # 100%) on a straight line is elapsed=3, value=75.
+    assert _has_pixel_near(img, xpix(3.0), ypix(75.0), "amber")
+
+
+def test_forecast_icon_overshoot_clips_to_the_top_edge_not_the_scale():
+    """A projection far past 100% (300%) must not drag the whole y-axis
+    down to fit it — the trend line clips to the top edge instead, so the
+    100% cap line stays where the formula puts it (~4.7px here), not
+    squeezed to the very top by a distant projected value."""
+    mini_charts = _import_mini_charts()
+    width, height = 110, 40
+    tag = mini_charts.forecast_icon(
+        [(0.0, 10.0), (1.0, 60.0)], 5.0, 300.0, QColor("#5ddea0"), width=width, height=height
+    )
+    img = _decode(tag)
+
+    y_max = max(10.0, 60.0, 100.0) * 1.08  # must NOT include 300 here
+    pad, plot_h = 2.0, height - 4.0
+    y100 = pad + plot_h * (1.0 - min(100.0 / y_max, 1.0))
+    assert _has_pixel_near(img, width / 2, y100, "red")
+    # The clipped trend line lands at the top edge (y=pad), near the
+    # window's own end (right edge) — not partway down a stretched scale.
+    assert _has_pixel_near(img, width - 3, pad, "amber", radius=2)
