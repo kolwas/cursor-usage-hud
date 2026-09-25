@@ -522,6 +522,46 @@ def test_history_average_can_override_within_a_short_windows_own_lifetime(tmp_pa
     assert "history" in proj.note or proj.avg_daily > 50.0
 
 
+def test_a_big_delta_overrides_even_before_the_elapsed_floor_is_reached(tmp_path):
+    """Regression, reported again after the previous fix: "Znow 5h to 0
+    gdni na minisie". A window that resets and climbs FAST (0% to 18% in
+    just 15 minutes — real live example) still lost to the elapsed-time
+    floor (30 minutes for a 5h window), because 15 minutes had not yet
+    passed, even though an 18-point jump is obviously not 2-samples-a-
+    minute-apart noise. The override must trust an unambiguously large
+    delta immediately, not make it wait out a timer first.
+    """
+    store = HistoryStore(tmp_path / "history.json")
+    reset = NOW - timedelta(minutes=15)
+    cycle_end = reset + timedelta(hours=5)
+    store.record([_claude_five_hour_snap(now=reset, cycle_end=cycle_end, used=0.0)])
+    snap = _claude_five_hour_snap(now=NOW, cycle_end=cycle_end, used=18.0)
+    store.record([snap])
+
+    proj = _proj(store, snap, key="five_hour")
+    assert abs(proj.renewal_offset_days) > 1e-6
+
+
+def test_a_tiny_delta_still_waits_for_the_elapsed_floor(tmp_path):
+    """The other half of the same fix: a THIN delta (noise-scale, not a
+    real signal) must not get to skip the elapsed-time floor just because
+    it's early — only a delta big enough to not plausibly be noise gets
+    the fast path."""
+    store = HistoryStore(tmp_path / "history.json")
+    reset = NOW - timedelta(minutes=2)
+    cycle_end = reset + timedelta(hours=5)
+    store.record([_claude_five_hour_snap(now=reset, cycle_end=cycle_end, used=0.0)])
+    snap = _claude_five_hour_snap(now=NOW, cycle_end=cycle_end, used=1.0)
+    store.record([snap])
+
+    proj = _proj(store, snap, key="five_hour")
+    # The history override must not have fired — a 1-point wobble 2
+    # minutes into a fresh window is exactly the noise case the elapsed
+    # floor exists to catch, and 1.0 point is well under _MIN_ELAPSED_DELTA.
+    assert "history" not in proj.note
+    assert proj.confident is False
+
+
 def test_a_re_estimated_cycle_end_does_not_orphan_earlier_same_cycle_history(tmp_path):
     """Regression: infer_window_end's cycle_end estimate can legitimately
     shift by hours between refreshes as more of the window's own log comes

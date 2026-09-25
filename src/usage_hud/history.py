@@ -10,15 +10,21 @@ from typing import Any
 from usage_hud.cycle import infer_cycle_start
 from usage_hud.models import BurnProjection, Metric, ProviderSnapshot
 
-# Ignore noisy first/last-sample same-cycle rates shorter than this — scaled
-# to the window's own length, same idea as the warm-up below. A FIXED 6-hour
-# floor (the original design) is longer than Claude's entire 5h window can
-# ever be, which meant the history-based average — the one that overrides
-# the tautological cycle-pace estimate, see below — could structurally
-# never activate for that window at all, no matter how much same-cycle data
-# accumulated. It would report a fabricated "-0d 0h 00m" ETA forever.
+# Trust the history-based average (the one that overrides the tautological
+# cycle-pace estimate, see below) once EITHER a meaningful slice of time has
+# elapsed, scaled to the window's own length (same idea as the warm-up
+# below — a fixed 6-hour floor, the original design, is longer than
+# Claude's entire 5h window can ever run for, so that window's override
+# could structurally never fire no matter how much same-cycle data
+# accumulated) OR the observed delta is already big enough that it plainly
+# is not noise, whichever comes first. Time-only gating kept losing to a
+# genuinely fast reset: 18 points climbed in the first 15 minutes of a
+# fresh 5h window is real signal, not 2 samples a minute apart implying an
+# absurd rate — but 15 minutes was still short of the elapsed floor, so the
+# override sat out and the tautological "0d" won anyway.
 _MIN_ELAPSED_FRACTION = 0.05
 _MIN_ELAPSED_FLOOR_DAYS = 1.0 / 48.0  # 30 minutes
+_MIN_ELAPSED_DELTA = 3.0  # percentage points
 _SKIP_KEYS = frozenset({"ondemand"})
 # ~8 days of history at the default 180s refresh — enough to cover a whole
 # Claude 7d weekly window on the sparkline, not just the burn-rate math.
@@ -386,7 +392,7 @@ class HistoryStore:
                     min_elapsed = _MIN_ELAPSED_FLOOR_DAYS
                     if window_days is not None:
                         min_elapsed = max(_MIN_ELAPSED_FLOOR_DAYS, window_days * _MIN_ELAPSED_FRACTION)
-                    if elapsed_days >= min_elapsed:
+                    if elapsed_days >= min_elapsed or delta >= _MIN_ELAPSED_DELTA:
                         hist_avg = delta / elapsed_days
                         # A cycle-pace built on a back-inferred start (no
                         # provider gives Claude a real one) algebraically
