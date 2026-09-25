@@ -71,8 +71,8 @@ _RAVEN_ANIM_MS = 260
 # the CSS, plus Qt's own block spacing) — 46px clipped the bottom caption
 # clean off; the label/image line-heights below are sized generously
 # rather than trimmed to a guessed minimum a second time.
-_ALERT_CHART_WIDTH = 76
-_ALERT_SPARK_HEIGHT = 22
+_ALERT_CHART_WIDTH = 110
+_ALERT_SPARK_HEIGHT = 40
 _ALERT_LABEL_LINE = 13
 _ALERT_SPAN_LINE = 12
 _ALERT_CHART_HEIGHT = _ALERT_LABEL_LINE + _ALERT_SPARK_HEIGHT + _ALERT_SPAN_LINE + 6

@@ -364,13 +364,15 @@ def forecast_icon(
         painter.end()
         return _img_tag(_data_uri(pix), width, height)
 
-    # Headroom above 100% so a trend that overshoots the cap is still on
-    # the canvas instead of pinned to the top edge — the whole point is to
-    # SEE how far past red it goes, not just that it does.
-    candidates = [v for _, v in values] + [100.0]
-    if projected_value is not None:
-        candidates.append(projected_value)
-    y_max = max(candidates) * 1.08
+    # The y-axis stops at 100% plus a hair of headroom — NOT stretched to
+    # fit however far a projection overshoots. Whether the trend clears the
+    # cap by a little or a lot is the same answer ("yes, it's exceeded"),
+    # and scaling the whole chart to fit a distant projected value used to
+    # squeeze the actual 0-100% range — the part with real data in it —
+    # into a thin band at the bottom. A trend that overshoots now just
+    # runs off the top of the chart instead of dragging everything else
+    # down to make room for it.
+    y_max = max([v for _, v in values] + [100.0]) * 1.08
 
     pad = 2.0
     plot_w = width - 2 * pad
