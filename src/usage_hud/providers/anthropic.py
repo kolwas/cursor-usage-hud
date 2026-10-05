@@ -288,7 +288,7 @@ def snapshot_from_desktop_history(
             pct = float(last_usage[log_key])
         except (TypeError, ValueError):
             continue
-        cycle_end = None if stale else infer_window_end(samples, log_key, span, now)
+        cycle_end = infer_window_end(samples, log_key, span, now)
         metrics.append(
             _pct_metric(
                 key,

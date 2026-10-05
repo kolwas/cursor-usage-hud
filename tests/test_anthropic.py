@@ -187,6 +187,39 @@ def test_stale_log_reports_no_window_end(tmp_path, monkeypatch):
     assert "stale 9h" in snap.metrics[0].detail
 
 
+def test_stale_log_still_reports_a_window_end_that_is_in_the_future(tmp_path, monkeypatch):
+    now = _utc(2026, 9, 15, 13)
+    reset = now - timedelta(hours=3)
+    _write_history(
+        tmp_path,
+        [
+            {"t": _ms(reset), "u": {"fh": 0, "sd": 20}},
+            {"t": _ms(now - timedelta(hours=2)), "u": {"fh": 7, "sd": 21}},
+        ],
+        monkeypatch,
+    )
+    snap = anthropic.snapshot_from_desktop_history(now, title="Claude")
+    assert snap is not None
+    assert "stale 2h" in snap.metrics[0].detail
+    assert snap.metrics[0].cycle_end == reset + timedelta(hours=5)
+
+
+def test_stale_log_drops_a_window_that_has_already_ended(tmp_path, monkeypatch):
+    now = _utc(2026, 9, 15, 13)
+    reset = now - timedelta(hours=6)
+    _write_history(
+        tmp_path,
+        [
+            {"t": _ms(reset), "u": {"fh": 0, "sd": 20}},
+            {"t": _ms(now - timedelta(hours=5, minutes=30)), "u": {"fh": 7, "sd": 21}},
+        ],
+        monkeypatch,
+    )
+    snap = anthropic.snapshot_from_desktop_history(now, title="Claude")
+    assert snap is not None
+    assert snap.metrics[0].cycle_end is None
+
+
 def test_extra_usage_is_called_out(tmp_path, monkeypatch):
     now = _utc(2026, 9, 15, 13)
     _write_history(tmp_path, [{"t": _ms(now), "u": {"fh": 10}}], monkeypatch)
