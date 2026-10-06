@@ -39,6 +39,17 @@ _MAX_SAMPLES = 8000
 _WARMUP_FRACTION = 0.10
 _WARMUP_FLOOR_DAYS = 1.0 / 24.0  # 1 hour
 
+# Usage is bursty and diurnal: one heavy morning is not the week's pace, and
+# an idle night is part of it. On a window this long (Claude's 7d, a monthly
+# plan) a rate read off a few hours of observed history is stretched across
+# days that will mostly be idle — 16 points in ~6h became "64%/day" and a
+# red "-5d". So for long windows the observed delta is averaged over at
+# least one full day, and a start we had to back-infer (the tautological
+# "elapsed" is not time anyone observed) only earns a confident verdict once
+# the history we actually recorded spans a warm-up slice of the window.
+_LONG_WINDOW_DAYS = 3.0
+_LONG_WINDOW_RATE_HORIZON_DAYS = 1.0
+
 # "Rocketing": a short-window burst, independent of `hot`'s whole-day
 # comparison — catches a burst happening right now even a few minutes after
 # midnight, when there is barely any "today" for `hot` to compare against.
@@ -382,10 +393,12 @@ class HistoryStore:
                         series_is_same_cycle = True
 
                 used_today = 0.0
+                observed_days = 0.0
                 if len(series) >= 2:
                     first, last = series[0], series[-1]
                     t0, t1 = _parse_ts(first["ts"]), _parse_ts(last["ts"])
                     elapsed_days = max((t1 - t0).total_seconds() / 86400.0, 1e-6)
+                    observed_days = elapsed_days if series_is_same_cycle else 0.0
                     v0 = _metric_level(first, metric.key) or 0.0
                     v1 = _metric_level(last, metric.key) or 0.0
                     delta = max(0.0, v1 - v0)
@@ -393,7 +406,10 @@ class HistoryStore:
                     if window_days is not None:
                         min_elapsed = max(_MIN_ELAPSED_FLOOR_DAYS, window_days * _MIN_ELAPSED_FRACTION)
                     if elapsed_days >= min_elapsed or delta >= _MIN_ELAPSED_DELTA:
-                        hist_avg = delta / elapsed_days
+                        rate_days = elapsed_days
+                        if window_days is not None and window_days >= _LONG_WINDOW_DAYS:
+                            rate_days = max(elapsed_days, _LONG_WINDOW_RATE_HORIZON_DAYS)
+                        hist_avg = delta / rate_days
                         # A cycle-pace built on a back-inferred start (no
                         # provider gives Claude a real one) algebraically
                         # reconstructs the constant-rate assumption that
@@ -413,6 +429,14 @@ class HistoryStore:
                         a = _metric_level(today_samples[0], metric.key) or 0.0
                         b = _metric_level(today_samples[-1], metric.key) or 0.0
                         used_today = max(0.0, b - a)
+
+                if (
+                    not cycle_start_is_real
+                    and window_days is not None
+                    and window_days >= _LONG_WINDOW_DAYS
+                ):
+                    warmup = max(_WARMUP_FLOOR_DAYS, window_days * _WARMUP_FRACTION)
+                    confident = observed_days >= warmup
 
                 if avg_daily <= 0 and days_left is None:
                     out.append(

@@ -593,3 +593,46 @@ def test_a_re_estimated_cycle_end_does_not_orphan_earlier_same_cycle_history(tmp
     # tautological cycle-pace built from only the last few minutes.
     assert proj.avg_daily < 30.0
     assert abs(proj.renewal_offset_days) > 0.5
+
+
+def _claude_seven_day_snap(*, now: datetime, cycle_end: datetime, used: float) -> ProviderSnapshot:
+    return ProviderSnapshot(
+        provider_id="anthropic",
+        title="Claude",
+        ok=True,
+        fetched_at=now,
+        metrics=[
+            Metric(
+                key="seven_day", label="7d", used=used, limit=100.0, unit="%",
+                percent_used=used, cycle_end=cycle_end,
+            )
+        ],
+    )
+
+
+def test_a_few_hours_of_burst_is_not_stretched_across_a_whole_week(tmp_path):
+    """Regression: "-5d" on Cla 7d. 16 points in ~6 observed hours was read
+    as 64%/day and extrapolated over all 6.5 remaining days. On a window this
+    long the delta is averaged over at least a full day."""
+    store = HistoryStore(tmp_path / "history.json")
+    cycle_end = NOW + timedelta(days=6, hours=12)
+    store.record([_claude_seven_day_snap(now=NOW - timedelta(hours=6), cycle_end=cycle_end, used=8.0)])
+    snap = _claude_seven_day_snap(now=NOW, cycle_end=cycle_end, used=24.0)
+    store.record([snap])
+
+    proj = _proj(store, snap, key="seven_day")
+    assert abs(proj.avg_daily - 16.0) < 1e-6
+
+
+def test_a_back_inferred_week_is_tentative_until_enough_history_is_observed(tmp_path):
+    store = HistoryStore(tmp_path / "history.json")
+    cycle_end = NOW + timedelta(days=6, hours=12)
+    store.record([_claude_seven_day_snap(now=NOW - timedelta(hours=6), cycle_end=cycle_end, used=8.0)])
+    snap = _claude_seven_day_snap(now=NOW, cycle_end=cycle_end, used=24.0)
+    store.record([snap])
+    assert _proj(store, snap, key="seven_day").confident is False
+
+    long_store = HistoryStore(tmp_path / "long.json")
+    long_store.record([_claude_seven_day_snap(now=NOW - timedelta(days=2), cycle_end=cycle_end, used=8.0)])
+    long_store.record([snap])
+    assert _proj(long_store, snap, key="seven_day").confident is True
