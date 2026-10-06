@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import faulthandler
 import sys
+import traceback
+from datetime import datetime
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon
@@ -169,8 +172,25 @@ class UsageHudApp:
         QApplication.instance().quit()
 
 
+def _install_crash_log(settings: Settings) -> None:
+    """pythonw has no console, so a crash used to vanish without a trace."""
+    try:
+        settings.state_dir.mkdir(parents=True, exist_ok=True)
+        log = open(settings.state_dir / "crash.log", "a", buffering=1, encoding="utf-8")  # noqa: SIM115
+    except OSError:
+        return
+    faulthandler.enable(log)
+
+    def _hook(exc_type, exc, tb) -> None:
+        log.write(f"\n--- {datetime.now().isoformat(timespec='seconds')} ---\n")
+        traceback.print_exception(exc_type, exc, tb, file=log)
+
+    sys.excepthook = _hook
+
+
 def run() -> int:
     settings = Settings.load()
+    _install_crash_log(settings)
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     app.setOrganizationName("usage-hud")

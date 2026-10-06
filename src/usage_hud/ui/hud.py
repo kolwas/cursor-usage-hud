@@ -42,8 +42,8 @@ from usage_hud.ui.formatters import (
 from usage_hud.ui.raven_glyph import (
     JUMP_CHANCE,
     JUMP_FRAME_COUNT,
-    SCENE_HEIGHT,
-    SCENE_WIDTH,
+    SCENE_DISPLAY_HEIGHT,
+    SCENE_DISPLAY_WIDTH,
     at_path_centre,
     raven_scene_html,
 )
@@ -71,8 +71,8 @@ _RAVEN_ANIM_MS = 260
 # the CSS, plus Qt's own block spacing) — 46px clipped the bottom caption
 # clean off; the label/image line-heights below are sized generously
 # rather than trimmed to a guessed minimum a second time.
-_ALERT_CHART_WIDTH = 110
-_ALERT_SPARK_HEIGHT = 40
+_ALERT_CHART_WIDTH = 92
+_ALERT_SPARK_HEIGHT = 32
 _ALERT_LABEL_LINE = 13
 # Time-span under the spark (next to the raven) — must stay readable at a
 # glance; 7px/12px was too small once the chart sat beside the watermark.
@@ -156,7 +156,7 @@ class WeatherPanel(QWidget):
         self._chip = QLabel()
         self._chip.setTextFormat(Qt.TextFormat.RichText)
         self._chip.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
-        self._chip.setFont(_ui_font(10, bold=True))
+        self._chip.setFont(_ui_font(9, bold=True))
         self._chip.setStyleSheet("color: #f3f6fb; background: transparent;")
         self._chip.setMouseTracking(True)
 
@@ -181,7 +181,7 @@ class WeatherPanel(QWidget):
         self._raven_mark.setTextFormat(Qt.TextFormat.RichText)
         self._raven_mark.setStyleSheet("background: transparent;")
         self._raven_mark.setText(self._raven_mark_html())
-        self._raven_mark.setFixedSize(SCENE_WIDTH, SCENE_HEIGHT)
+        self._raven_mark.setFixedSize(SCENE_DISPLAY_WIDTH, SCENE_DISPLAY_HEIGHT)
 
         # A small extra chart that only shows up when some gauge is
         # genuinely alarming (a real pace spike, or a confirmed — not
@@ -204,8 +204,8 @@ class WeatherPanel(QWidget):
         content_col.addWidget(self._flyout)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 8, 14, 8)
-        layout.setSpacing(10)
+        layout.setContentsMargins(10, 5, 10, 5)
+        layout.setSpacing(6)
         layout.addLayout(content_col, 1)
         layout.addWidget(self._alert_chart, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(self._raven_mark, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -578,7 +578,7 @@ class WeatherPanel(QWidget):
             # minimum or the raven scene's fixed height (SCENE_HEIGHT) —
             # a floor sized only for the table used to clip a few pixels
             # off the bottom of the watermark on a single-gauge chip.
-            self.setFixedHeight(max(40, SCENE_HEIGHT, min(220, chip_hint.height() + 16)))
+            self.setFixedHeight(max(34, SCENE_DISPLAY_HEIGHT, min(220, chip_hint.height() + 10)))
             # The table grew a lot wider once the reset countdown and the
             # ETA badge each split into separate days/hours/minutes columns
             # (10 columns total) — the old 420px cap was clipping them right
@@ -592,12 +592,12 @@ class WeatherPanel(QWidget):
             # same for the alarm chart when something is actually
             # alarming — the window widens to make room for it rather than
             # it covering the raven or anything else.
-            side_mark = SCENE_WIDTH + 10
+            side_mark = SCENE_DISPLAY_WIDTH + 6
             # isHidden(), not isVisible(): the latter also depends on the
             # panel itself already being shown, which isn't guaranteed to
             # have happened yet the first time _render() runs.
-            alert_mark = 0 if self._alert_chart.isHidden() else _ALERT_CHART_WIDTH + 10
-            self.setFixedWidth(max(220, min(720, chip_hint.width() + 36 + side_mark + alert_mark)))
+            alert_mark = 0 if self._alert_chart.isHidden() else _ALERT_CHART_WIDTH + 6
+            self.setFixedWidth(max(220, min(720, chip_hint.width() + 20 + side_mark + alert_mark)))
         else:
             self.setMinimumHeight(0)
             self.setMaximumHeight(16777215)
@@ -913,11 +913,11 @@ class WeatherPanel(QWidget):
         if index == 0:
             pad = "0"
         elif index in cls._CHIP_TIGHT_PAD:
-            pad = "3px"
+            pad = "2px"
         else:
-            pad = "7px"
+            pad = "5px"
         bg = f" background-color:{cls._CHIP_ALARM_BG};" if highlight else ""
-        return f'<td style="padding:3px 0 0 {pad}; white-space:nowrap;{align}{bg}">{html}</td>'
+        return f'<td style="padding:2px 0 0 {pad}; white-space:nowrap;{align}{bg}">{html}</td>'
 
     def _chip_row(self, *cells: str, highlight: bool = False) -> str:
         return "<tr>" + "".join(
@@ -1009,7 +1009,7 @@ class WeatherPanel(QWidget):
                         hours_html,
                         minutes_html,
                         pct_html,
-                        mini_charts.usage_bar_icon(pct, QColor(color)),
+                        mini_charts.usage_bar_icon(pct, QColor(color), width=30),
                         eta_days,
                         eta_hours,
                         eta_minutes,

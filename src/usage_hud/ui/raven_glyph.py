@@ -29,6 +29,12 @@ _LEG_B_LIFTED = ((16.0, 27.2), (15.4, 29.1))
 SCENE_WIDTH = 68
 SCENE_HEIGHT = 44
 _SCALE = 1.05
+# The scene is drawn on the 68x44 grid above and shrunk as a whole to this
+# many on-screen pixels, so the walk path, hop arc and bush keep their
+# proportions while the chip takes less room.
+SCENE_ZOOM = 0.72
+SCENE_DISPLAY_WIDTH = round(SCENE_WIDTH * SCENE_ZOOM)
+SCENE_DISPLAY_HEIGHT = round(SCENE_HEIGHT * SCENE_ZOOM)
 _RAVEN_BOX = 32.0 * _SCALE  # the raven_path design grid, at this scale
 _TOP_MARGIN = (SCENE_HEIGHT - _RAVEN_BOX) / 2.0
 _WALK_X_MIN = 2.0
@@ -243,10 +249,11 @@ def raven_scene_html(
         x, y, tilt, leg_a, leg_b, facing_left = walk_pose(index)
         show_bush = False
 
-    pix = QPixmap(SCENE_WIDTH, SCENE_HEIGHT)
+    pix = QPixmap(SCENE_DISPLAY_WIDTH, SCENE_DISPLAY_HEIGHT)
     pix.fill(QColor(0, 0, 0, 0))
     painter = QPainter(pix)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.scale(SCENE_ZOOM, SCENE_ZOOM)
 
     if show_bush and bush_color is not None:
         bush_cx = (_WALK_X_MIN + _WALK_X_MAX) / 2.0 + _RAVEN_BOX / 2.0
@@ -273,4 +280,7 @@ def raven_scene_html(
     buf.open(QIODevice.OpenModeFlag.WriteOnly)
     pix.save(buf, "PNG")
     encoded = base64.b64encode(bytes(buf.data())).decode("ascii")
-    return f'<img src="data:image/png;base64,{encoded}" width="{SCENE_WIDTH}" height="{SCENE_HEIGHT}">'
+    return (
+        f'<img src="data:image/png;base64,{encoded}" '
+        f'width="{SCENE_DISPLAY_WIDTH}" height="{SCENE_DISPLAY_HEIGHT}">'
+    )
