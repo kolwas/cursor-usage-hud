@@ -28,7 +28,7 @@ def evaluate_alerts(
 
         for metric in snap.metrics:
             pct = metric.resolved_percent()
-            if pct is None:
+            if pct is None or metric.stale:
                 continue
             threshold = settings.alert_included_pct
             if metric.key == "ondemand":

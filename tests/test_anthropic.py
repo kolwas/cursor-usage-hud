@@ -270,3 +270,26 @@ def test_provider_is_registered_from_local_signals_only(tmp_path, monkeypatch):
 
     monkeypatch.setattr(anthropic, "claude_account_meta", lambda: {"emailAddress": "x@y.z"})
     assert anthropic.claude_present_locally() is True
+
+
+def test_old_reading_of_a_short_window_is_marked_stale_but_a_weekly_one_is_not(tmp_path, monkeypatch):
+    now = _utc(2026, 9, 15, 13)
+    _write_history(
+        tmp_path,
+        [{"t": _ms(now - timedelta(hours=3)), "u": {"fh": 100, "sd": 24}}],
+        monkeypatch,
+    )
+    snap = anthropic.snapshot_from_desktop_history(now, title="Claude")
+    by_key = {m.key: m for m in snap.metrics}
+    # 3h of silence: a 5h gauge may have rolled over and refilled, a 7d one has not.
+    assert by_key["five_hour"].stale is True
+    assert by_key["seven_day"].stale is False
+
+
+def test_fresh_reading_is_not_stale(tmp_path, monkeypatch):
+    now = _utc(2026, 9, 15, 13)
+    _write_history(
+        tmp_path, [{"t": _ms(now - timedelta(minutes=5)), "u": {"fh": 40, "sd": 24}}], monkeypatch
+    )
+    snap = anthropic.snapshot_from_desktop_history(now, title="Claude")
+    assert not any(m.stale for m in snap.metrics)

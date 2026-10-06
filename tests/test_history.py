@@ -1,3 +1,4 @@
+import dataclasses
 from datetime import datetime, timedelta, timezone
 
 from usage_hud.history import HistoryStore
@@ -636,3 +637,12 @@ def test_a_back_inferred_week_is_tentative_until_enough_history_is_observed(tmp_
     long_store.record([_claude_seven_day_snap(now=NOW - timedelta(days=2), cycle_end=cycle_end, used=8.0)])
     long_store.record([snap])
     assert _proj(long_store, snap, key="seven_day").confident is True
+
+
+def test_stale_readings_are_neither_recorded_nor_projected(tmp_path):
+    store = HistoryStore(tmp_path / "history.json")
+    snap = _claude_five_hour_snap(now=NOW, cycle_end=NOW + timedelta(hours=2), used=100.0)
+    snap.metrics[0] = dataclasses.replace(snap.metrics[0], stale=True)
+    store.record([snap])
+    assert store._read()["samples"] == []
+    assert store.projections([snap], burn_multiplier=2.0) == []

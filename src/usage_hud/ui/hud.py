@@ -988,11 +988,15 @@ class WeatherPanel(QWidget):
                 # behind another gauge's prediction.
                 label = f"{tag} {chip_metric_tag(metric)}" if multi else tag
                 days_html, hours_html, minutes_html = self._reset_parts_html(snap, metric)
-                pct_html = (
-                    f'<span style="color:{color}; font-weight:700;">{pct:.0f}%</span>'
-                    if pct is not None
-                    else '<span style="color:#5a6272;">—</span>'
-                )
+                if pct is None:
+                    pct_html = '<span style="color:#5a6272;">—</span>'
+                elif metric.stale:
+                    # Last logged value, not a live one — grey and "~" so it
+                    # is never read as the current state.
+                    color = "#6f7686"
+                    pct_html = f'<span style="color:{color}; font-weight:700;">~{pct:.0f}%</span>'
+                else:
+                    pct_html = f'<span style="color:{color}; font-weight:700;">{pct:.0f}%</span>'
                 proj = proj_map.get((snap.provider_id, metric.key)) if multi else etas.get(snap.provider_id)
                 eta_days, eta_hours, eta_minutes = self._eta_parts_html(proj)
                 # A genuinely alarming row (confirmed on track to exhaust, or

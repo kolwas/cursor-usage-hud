@@ -258,6 +258,9 @@ class HistoryStore:
         for snap in snapshots:
             if not snap.ok:
                 continue
+            live = [m for m in snap.metrics if not m.stale]
+            if not live:
+                continue
             entry = {
                 "ts": snap.fetched_at.astimezone(timezone.utc).isoformat(),
                 "provider_id": snap.provider_id,
@@ -272,7 +275,7 @@ class HistoryStore:
                         "unit": m.unit,
                         "cycle_end": m.cycle_end.isoformat() if m.cycle_end else None,
                     }
-                    for m in snap.metrics
+                    for m in live
                 ],
             }
             samples.append(entry)
@@ -328,7 +331,7 @@ class HistoryStore:
             if not snap.ok or not snap.metrics:
                 continue
             for metric in snap.metrics:
-                if metric.key in _SKIP_KEYS:
+                if metric.key in _SKIP_KEYS or metric.stale:
                     continue
                 if metric.limit is None and metric.resolved_percent() is None:
                     continue

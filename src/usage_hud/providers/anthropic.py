@@ -171,6 +171,7 @@ def _pct_metric(
     *,
     cycle_end: datetime | None = None,
     detail: str = "",
+    stale: bool = False,
 ) -> Metric:
     value = max(0.0, min(100.0, float(pct)))
     return Metric(
@@ -183,6 +184,7 @@ def _pct_metric(
         percent_used=value,
         detail=detail,
         cycle_end=cycle_end,
+        stale=stale,
     )
 
 
@@ -289,6 +291,10 @@ def snapshot_from_desktop_history(
         except (TypeError, ValueError):
             continue
         cycle_end = infer_window_end(samples, log_key, span, now)
+        # Old relative to THIS window: half an hour of silence says little
+        # about a weekly gauge but a lot about a 5h one that may have rolled
+        # over and refilled since.
+        metric_stale = age > max(STALE_AFTER, span * 0.1)
         metrics.append(
             _pct_metric(
                 key,
@@ -296,6 +302,7 @@ def snapshot_from_desktop_history(
                 pct,
                 cycle_end=cycle_end,
                 detail=detail + (" · reset est." if cycle_end else ""),
+                stale=metric_stale,
             )
         )
     if not metrics:

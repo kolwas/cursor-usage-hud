@@ -101,3 +101,19 @@ def test_hot_takes_priority_over_rocketing_for_the_same_gauge():
     codes = [a.code for a in alerts if a.provider_id == "anthropic"]
     assert "five_hour_hot_day" in codes
     assert "five_hour_rocketing" not in codes
+
+
+def test_stale_reading_raises_no_threshold_alert():
+    snap = ProviderSnapshot(
+        provider_id="anthropic",
+        title="Claude",
+        ok=True,
+        fetched_at=utc_now(),
+        metrics=[
+            Metric(
+                key="five_hour", label="5h", used=100.0, limit=100.0, unit="%",
+                percent_used=100.0, stale=True,
+            )
+        ],
+    )
+    assert evaluate_alerts([snap], [], Settings.load()) == []

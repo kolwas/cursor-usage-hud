@@ -33,6 +33,10 @@ class Metric:
     # Optional per-metric quota window (rolling 5h / weekly / …).
     cycle_start: datetime | None = None
     cycle_end: datetime | None = None
+    # The reading is the last one a source logged, old enough that the real
+    # value has probably moved on — shown as "last known", never fed to
+    # alerts, predictions or history.
+    stale: bool = False
 
     def resolved_percent(self) -> float | None:
         if self.percent_used is not None:
