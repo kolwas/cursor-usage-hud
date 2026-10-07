@@ -293,3 +293,27 @@ def test_fresh_reading_is_not_stale(tmp_path, monkeypatch):
     )
     snap = anthropic.snapshot_from_desktop_history(now, title="Claude")
     assert not any(m.stale for m in snap.metrics)
+
+
+def test_empty_trailing_reading_does_not_hide_the_last_real_one(tmp_path, monkeypatch):
+    """Regression: "Claude nie łapie". Desktop appended an empty `{}` reading
+    right after a real one, and the HUD took the newest entry blindly and
+    reported "no Claude Desktop usage log"."""
+    now = _utc(2026, 9, 15, 13)
+    _write_history(
+        tmp_path,
+        [
+            {"t": _ms(now - timedelta(minutes=10)), "u": {"fh": 9, "sd": 32}},
+            {"t": _ms(now - timedelta(minutes=9)), "u": {}},
+        ],
+        monkeypatch,
+    )
+    snap = anthropic.snapshot_from_desktop_history(now, title="Claude")
+    assert snap is not None and snap.ok
+    assert [(m.key, m.used) for m in snap.metrics] == [("five_hour", 9.0), ("seven_day", 32.0)]
+
+
+def test_log_with_only_empty_readings_reports_no_data(tmp_path, monkeypatch):
+    now = _utc(2026, 9, 15, 13)
+    _write_history(tmp_path, [{"t": _ms(now), "u": {}}], monkeypatch)
+    assert anthropic.snapshot_from_desktop_history(now, title="Claude") is None

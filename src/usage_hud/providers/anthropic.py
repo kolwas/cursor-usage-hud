@@ -274,7 +274,17 @@ def snapshot_from_desktop_history(
     if not samples:
         return None
 
-    last_ts, last_usage = samples[-1]
+    # Desktop sometimes appends an empty reading (it could not fetch usage
+    # just then); the newest reading that actually carries numbers is the
+    # real "last known" state, and its age is what staleness is judged by.
+    readings = [
+        (ts, usage)
+        for ts, usage in samples
+        if any(usage.get(log_key) is not None for _, log_key, _, _ in WINDOWS)
+    ]
+    if not readings:
+        return None
+    last_ts, last_usage = readings[-1]
     age = now - last_ts
     stale = age > STALE_AFTER
     detail = "Claude Desktop log"
