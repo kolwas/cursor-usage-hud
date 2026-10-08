@@ -258,6 +258,10 @@ class HistoryStore:
         for snap in snapshots:
             if not snap.ok:
                 continue
+            imported = snap.raw.get("history_entries")
+            if imported is not None:
+                self._merge_source_entries(samples, snap.provider_id, imported)
+                continue
             live = [m for m in snap.metrics if not m.stale]
             if not live:
                 continue
@@ -282,6 +286,23 @@ class HistoryStore:
         if len(samples) > _MAX_SAMPLES:
             data["samples"] = samples[-_MAX_SAMPLES:]
         self._write(data)
+
+    @staticmethod
+    def _merge_source_entries(
+        samples: list[dict[str, Any]], provider_id: str, entries: list[dict[str, Any]]
+    ) -> None:
+        """Replace this provider's self-sampled entries with the source's own
+        timestamped readings (idempotent — a reading is added once)."""
+        samples[:] = [
+            s
+            for s in samples
+            if s.get("provider_id") != provider_id or s.get("src") == "log"
+        ]
+        known = {s["ts"] for s in samples if s.get("provider_id") == provider_id}
+        added = [e for e in entries if e["ts"] not in known]
+        if added:
+            samples.extend(added)
+            samples.sort(key=lambda s: _parse_ts(s["ts"]))
 
     def series(
         self,

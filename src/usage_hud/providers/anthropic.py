@@ -260,6 +260,53 @@ def infer_window_end(
     return min(end, now + span)
 
 
+_MAX_HISTORY_ENTRIES = 800
+
+
+def history_entries_from_log(
+    samples: list[tuple[datetime, dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """The log, as HistoryStore entries stamped with the time Desktop really
+    took each reading — not the time this app happened to look at it, which
+    is hours later whenever the HUD was off or Desktop was closed. Each
+    entry's window end is estimated from the readings up to that moment."""
+    entries: list[dict[str, Any]] = []
+    for i, (ts, usage) in enumerate(samples):
+        metrics: list[dict[str, Any]] = []
+        for key, log_key, _label, span in WINDOWS:
+            raw_value = usage.get(log_key)
+            if raw_value is None:
+                continue
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError):
+                continue
+            end = infer_window_end(samples[: i + 1], log_key, span, ts)
+            metrics.append(
+                {
+                    "key": key,
+                    "used": value,
+                    "limit": 100.0,
+                    "percent_used": value,
+                    "unit": "%",
+                    "cycle_end": end.isoformat() if end else None,
+                }
+            )
+        if not metrics:
+            continue
+        entries.append(
+            {
+                "ts": ts.isoformat(),
+                "provider_id": "anthropic",
+                "cycle_start": None,
+                "cycle_end": None,
+                "src": "log",
+                "metrics": metrics,
+            }
+        )
+    return entries[-_MAX_HISTORY_ENTRIES:]
+
+
 def snapshot_from_desktop_history(
     now: datetime,
     *,
@@ -305,6 +352,22 @@ def snapshot_from_desktop_history(
         # about a weekly gauge but a lot about a 5h one that may have rolled
         # over and refilled since.
         metric_stale = age > max(STALE_AFTER, span * 0.1)
+        if age > span:
+            # Silent for longer than the window itself: that window has
+            # certainly renewed, so the old percent belongs to a window that
+            # no longer exists. Unknown, not "last value".
+            metrics.append(
+                Metric(
+                    key=key,
+                    label=label,
+                    used=0.0,
+                    limit=None,
+                    unit="%",
+                    detail=detail + " · window renewed, no reading since",
+                    stale=True,
+                )
+            )
+            continue
         metrics.append(
             _pct_metric(
                 key,
@@ -333,6 +396,7 @@ def snapshot_from_desktop_history(
             "source": "plan-usage-history",
             "path": str(path),
             "sampled_at": last_ts.isoformat(),
+            "history_entries": history_entries_from_log(samples),
         },
     )
 

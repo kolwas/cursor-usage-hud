@@ -646,3 +646,23 @@ def test_stale_readings_are_neither_recorded_nor_projected(tmp_path):
     store.record([snap])
     assert store._read()["samples"] == []
     assert store.projections([snap], burn_multiplier=2.0) == []
+
+
+def test_log_entries_replace_self_sampled_ones_and_are_added_once(tmp_path):
+    store = HistoryStore(tmp_path / "history.json")
+    old = _claude_five_hour_snap(now=NOW, cycle_end=NOW + timedelta(hours=2), used=50.0)
+    store.record([old])
+    assert len(store._read()["samples"]) == 1
+
+    ts = (NOW - timedelta(hours=1)).isoformat()
+    entry = {
+        "ts": ts, "provider_id": "anthropic", "cycle_start": None, "cycle_end": None,
+        "src": "log",
+        "metrics": [{"key": "five_hour", "used": 10.0, "limit": 100.0, "percent_used": 10.0,
+                     "unit": "%", "cycle_end": None}],
+    }
+    logged = dataclasses.replace(old, raw={"history_entries": [entry]})
+    store.record([logged])
+    store.record([logged])
+    samples = store._read()["samples"]
+    assert [s["ts"] for s in samples] == [ts]

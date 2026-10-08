@@ -35,7 +35,9 @@ _CHIP_METRIC_TAG: dict[str, str] = {
 def chip_metrics(snap: ProviderSnapshot) -> list[Metric]:
     """Every gauge worth a chip row: all of them, always, not just the first —
     each gets its own line, its own clock and its own prediction."""
-    return [m for m in snap.metrics if m.resolved_percent() is not None]
+    # A stale gauge with no percent (its window has renewed since the last
+    # log reading) keeps its row, shown as "—", rather than vanishing.
+    return [m for m in snap.metrics if m.resolved_percent() is not None or m.stale]
 
 
 def chip_metric_tag(metric: Metric) -> str:

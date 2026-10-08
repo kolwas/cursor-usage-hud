@@ -317,3 +317,33 @@ def test_log_with_only_empty_readings_reports_no_data(tmp_path, monkeypatch):
     now = _utc(2026, 9, 15, 13)
     _write_history(tmp_path, [{"t": _ms(now), "u": {}}], monkeypatch)
     assert anthropic.snapshot_from_desktop_history(now, title="Claude") is None
+
+
+def test_reading_older_than_its_own_window_is_unknown_not_last_value(tmp_path, monkeypatch):
+    """A 5h gauge last read 15h ago belongs to a window that has since
+    renewed: show unknown, not the old percent."""
+    now = _utc(2026, 9, 15, 13)
+    _write_history(
+        tmp_path,
+        [{"t": _ms(now - timedelta(hours=15)), "u": {"fh": 8, "sd": 36}}],
+        monkeypatch,
+    )
+    snap = anthropic.snapshot_from_desktop_history(now, title="Claude")
+    by_key = {m.key: m for m in snap.metrics}
+    assert by_key["five_hour"].resolved_percent() is None
+    assert by_key["five_hour"].stale is True
+    assert by_key["seven_day"].resolved_percent() == 36.0
+
+
+def test_history_entries_carry_the_logs_own_timestamps(tmp_path, monkeypatch):
+    now = _utc(2026, 9, 15, 13)
+    t0, t1 = now - timedelta(hours=3), now - timedelta(hours=2)
+    _write_history(
+        tmp_path,
+        [{"t": _ms(t0), "u": {"fh": 0, "sd": 5}}, {"t": _ms(t1), "u": {"fh": 12, "sd": 6}}],
+        monkeypatch,
+    )
+    snap = anthropic.snapshot_from_desktop_history(now, title="Claude")
+    entries = snap.raw["history_entries"]
+    assert [e["ts"] for e in entries] == [t0.isoformat(), t1.isoformat()]
+    assert entries[1]["metrics"][0]["cycle_end"] == (t0 + timedelta(hours=5)).isoformat()
