@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from usage_hud.models import Metric, ProviderSnapshot, utc_now
+from usage_hud.providers import anthropic_live
 from usage_hud.providers.base import Provider
 
 # Claude Desktop log key, chip label, window length.
@@ -415,17 +416,42 @@ class AnthropicProvider(Provider):
     id = "anthropic"
     title = "Claude"
 
+    def __init__(self, *, live: bool = False) -> None:
+        self.live = live
+
     def fetch(self) -> ProviderSnapshot:
         now = utc_now()
         account = claude_account_meta()
         title = plan_title(account)
+        extra_usage = bool(account.get("hasExtraUsageEnabled"))
+
+        live_note = ""
+        if self.live:
+            # Network + sign-in boundary: whatever goes wrong in there must
+            # fall back to the Desktop log, never take the whole refresh down.
+            try:
+                live = anthropic_live.snapshot_from_live(
+                    now,
+                    anthropic_live.fetch_live_usage(),
+                    title=title,
+                    extra_usage=extra_usage,
+                )
+            except anthropic_live.LiveUsageUnavailable as exc:
+                live = None
+                live_note = f" · live usage unavailable ({exc})"
+            except Exception as exc:  # noqa: BLE001
+                live = None
+                live_note = f" · live usage failed ({type(exc).__name__})"
+            if live is not None:
+                return live
 
         snapshot = snapshot_from_desktop_history(
             now,
             title=title,
-            extra_usage=bool(account.get("hasExtraUsageEnabled")),
+            extra_usage=extra_usage,
         )
         if snapshot is not None:
+            snapshot.message += live_note
             return snapshot
 
         return ProviderSnapshot(

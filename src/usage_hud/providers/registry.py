@@ -51,7 +51,7 @@ def discover_providers(settings: Settings | None = None) -> list[Provider]:
     # Claude is read from local Claude files only — an OpenCode Anthropic login
     # would need the account API, which this HUD deliberately does not call.
     if prefs.is_enabled("anthropic") and claude_present_locally():
-        candidates.append(AnthropicProvider())
+        candidates.append(AnthropicProvider(live=settings.claude_live_usage))
 
     if settings.enable_cloud_stub or antigravity_accounts_path().is_file():
         if settings.enable_cloud_stub and prefs.is_enabled("cloud"):

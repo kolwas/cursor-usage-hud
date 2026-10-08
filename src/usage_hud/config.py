@@ -138,6 +138,9 @@ class Settings:
     popup_seconds: int = 12
     # Comma-separated provider IDs to hide (cursor,copilot,openai,…).
     disabled_providers: frozenset[str] = frozenset()
+    # Opt-in: ask Anthropic for exact Claude usage instead of reading only the
+    # Desktop log (see providers/anthropic_live.py). Off by default.
+    claude_live_usage: bool = False
 
     @classmethod
     def load(cls) -> Settings:
@@ -187,4 +190,5 @@ class Settings:
             enable_cloud_stub=_resolve_bool(user, "USAGE_HUD_ENABLE_CLOUD", "enable_cloud_stub", False),
             popup_seconds=max(4, _resolve_int(user, "USAGE_HUD_POPUP_SECONDS", "popup_seconds", 12)),
             disabled_providers=disabled,
+            claude_live_usage=_resolve_bool(user, "USAGE_HUD_CLAUDE_LIVE", "claude_live_usage", False),
         )

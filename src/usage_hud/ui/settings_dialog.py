@@ -7,9 +7,10 @@ the one credential field that's actually needed: GitHub's token, since
 Actions/storage billing has no local file to auto-detect a subscription
 from the way Cursor/Copilot/OpenCode Go/OpenAI/Claude do).
 
-Claude/Anthropic deliberately gets no credential field here — see
-AnthropicProvider: it is local-files-only by design, zero network calls,
-and this dialog must not grow a way around that.
+Claude/Anthropic gets no credential field here: by default it is
+local-files-only with zero network calls. The one opt-in is a "live usage"
+checkbox (providers/anthropic_live.py); the token itself is never entered,
+stored or shown by this dialog.
 """
 
 from __future__ import annotations
@@ -148,6 +149,7 @@ class SettingsDialog(QDialog):
         self._github_token: QLineEdit | None = None
         self._github_login: QLineEdit | None = None
         self._cloud_stub: QCheckBox | None = None
+        self._claude_live: QCheckBox | None = None
 
         for pid, label in KNOWN_PROVIDERS:
             detected, detail = _detect_status(pid, self._auth)
@@ -176,6 +178,19 @@ class SettingsDialog(QDialog):
                 self._github_login.setPlaceholderText("auto-detected from the token if left blank")
                 form.addRow("Login", self._github_login)
                 box_layout.addLayout(form)
+
+            if pid == "anthropic":
+                self._claude_live = QCheckBox("Live usage (exact percent and reset times)")
+                self._claude_live.setChecked(self._settings.claude_live_usage)
+                box_layout.addWidget(self._claude_live)
+                warn = QLabel(
+                    "Off by default. When on, the app reads Claude Code's sign-in at "
+                    "runtime and asks Anthropic (only) for your usage. The token is "
+                    "never saved or logged. If it fails, the Desktop log is used."
+                )
+                warn.setWordWrap(True)
+                warn.setStyleSheet("color: #6f7686; font-size: 11px;")
+                box_layout.addWidget(warn)
 
             if pid == "cloud":
                 self._cloud_stub = QCheckBox("Enable experimental cloud stub")
@@ -206,6 +221,8 @@ class SettingsDialog(QDialog):
             values["github_login"] = self._github_login.text().strip()
         if self._cloud_stub is not None:
             values["enable_cloud_stub"] = self._cloud_stub.isChecked()
+        if self._claude_live is not None:
+            values["claude_live_usage"] = self._claude_live.isChecked()
 
         save_user_settings(self._settings.state_dir, values)
         self.accept()

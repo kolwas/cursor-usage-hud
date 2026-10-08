@@ -15,7 +15,7 @@ configure to get started, only to hide what you don't use (see [Providers](#prov
 | GitHub Copilot | OpenCode OAuth (`auth.json`) | yes — its own `api.github.com/copilot_internal/user` |
 | OpenCode Go | `opencode-go` / `opencode` API key | yes — its own `/zen/go/v1/usage` |
 | OpenAI / ChatGPT | OpenCode OAuth (when connected) | yes — its own account-usage endpoint |
-| Claude | Claude Desktop log + `~/.claude.json` plan metadata | **no** — see below |
+| Claude | Claude Desktop log + `~/.claude.json` plan metadata | **no** by default — optional live mode, see below |
 | GitHub (Actions/storage billing) | a token you configure — **off by default** | yes — its own `api.github.com` billing endpoints |
 
 GitHub Actions/storage billing is not an AI service and, unlike everything above, has no local
@@ -30,17 +30,26 @@ show once the account is entitled.
 
 ## Privacy & credentials
 
-**Claude is the one provider that reads no token and makes no network call at all.** It is
-built from two local files only:
+**By default Claude reads no token and makes no network call at all.** It is built from two
+local files only:
 
 1. `plan-usage-history.json` — the percent-per-window log Claude Desktop writes for itself.
 2. `~/.claude.json` → `oauthAccount` — account profile fields (e-mail, plan tier, an
    extra-usage flag). No token lives in that block; only account metadata does.
 
-Deliberately: Anthropic's account API would give exact reset times, but that needs the OAuth
-token Claude Code stores locally, and reading that token and sending it anywhere was ruled
-out for this tool — accuracy is traded for staying entirely local. See
+The local log has a cost: Claude Desktop only writes it while it is running, so the HUD is
+blind to Claude Code usage when Desktop is closed, and reset times are estimates. See
 [Claude: how the limits actually work](#claude-how-the-limits-actually-work) for the detail.
+
+**Optional live mode (off by default).** Settings → Services → Claude → *Live usage*
+(or `USAGE_HUD_CLAUDE_LIVE=1`) makes the app ask Anthropic for exact percent and reset
+times. It needs the sign-in token Claude Code stores locally, so it is strictly opt-in, and
+the code that touches the token lives in exactly one function,
+`fetch_live_usage()` in `providers/anthropic_live.py`. Its rules: the token is read inside
+that call only, held in a local variable, sent only to Anthropic over HTTPS, never refreshed
+(refreshing could sign Claude Code out), never saved, logged or put in an error message. Any
+failure falls back to the Desktop log. The function ships **unimplemented** — until someone
+writes it, turning the option on changes nothing.
 
 For the other providers, the credential model is: usage-hud reads the token *that app already
 wrote to disk* (Cursor's session in `state.vscdb`, OpenCode's in `auth.json`) and sends it

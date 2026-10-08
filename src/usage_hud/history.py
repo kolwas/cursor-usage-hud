@@ -270,6 +270,7 @@ class HistoryStore:
                 "provider_id": snap.provider_id,
                 "cycle_start": snap.cycle_start.isoformat() if snap.cycle_start else None,
                 "cycle_end": snap.cycle_end.isoformat() if snap.cycle_end else None,
+                **({"src": snap.raw["source"]} if snap.raw.get("source") == "live" else {}),
                 "metrics": [
                     {
                         "key": m.key,
@@ -291,12 +292,13 @@ class HistoryStore:
     def _merge_source_entries(
         samples: list[dict[str, Any]], provider_id: str, entries: list[dict[str, Any]]
     ) -> None:
-        """Replace this provider's self-sampled entries with the source's own
-        timestamped readings (idempotent — a reading is added once)."""
+        """Replace this provider's legacy self-sampled entries with the
+        source's own timestamped readings (idempotent — a reading is added
+        once). Entries from a live source are real readings too and stay."""
         samples[:] = [
             s
             for s in samples
-            if s.get("provider_id") != provider_id or s.get("src") == "log"
+            if s.get("provider_id") != provider_id or s.get("src") in {"log", "live"}
         ]
         known = {s["ts"] for s in samples if s.get("provider_id") == provider_id}
         added = [e for e in entries if e["ts"] not in known]
