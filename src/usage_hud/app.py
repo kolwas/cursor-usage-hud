@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 from usage_hud.alerts import evaluate_alerts
 from usage_hud.branding import APP_NAME, DESKTOP_FILE_NAME, app_icon
 from usage_hud.config import Settings
+from usage_hud.fetcher import BackgroundFetcher
 from usage_hud.history import HistoryStore
 from usage_hud.providers.registry import discover_providers, visible_snapshots
 from usage_hud.providers_pref import ProviderPrefs
@@ -30,6 +31,7 @@ class UsageHudApp:
             env_disabled=set(settings.disabled_providers),
         )
         self.providers = discover_providers(settings)
+        self._fetcher = BackgroundFetcher(self._apply)
         self.history = HistoryStore(settings.state_dir / "history.json")
         self.snooze_store = SnoozeStore(settings.state_dir / "snooze.json")
         self._snooze = self.snooze_store.load()
@@ -136,8 +138,11 @@ class UsageHudApp:
             self.panel.dock_to_taskbar(force=False)
 
     def refresh(self) -> None:
-        self.providers = discover_providers(self.settings)
-        snapshots = [p.fetch() for p in self.providers]
+        """Ask for fresh data; the window is updated by _apply when it arrives."""
+        self._fetcher.start(self.settings)
+
+    def _apply(self, providers: list, snapshots: list) -> None:
+        self.providers = providers
         shown = visible_snapshots(snapshots)
         self.history.record(shown)
         projections = self.history.projections(
