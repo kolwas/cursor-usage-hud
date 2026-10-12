@@ -42,3 +42,30 @@ def test_left_click_pops_menu_with_quit(tmp_path):
 
     tray._tray.hide()
     tray._menu.deleteLater()
+
+
+def test_unchanged_state_does_not_touch_the_tray_again(tmp_path):
+    """setIcon/setToolTip are synchronous calls into Explorer, a place the
+    window has hung on before — an identical refresh must not repeat them."""
+    prefs = ProviderPrefs(tmp_path / "providers.json")
+    tray = TrayController(
+        on_refresh=MagicMock(),
+        on_show_chip=MagicMock(),
+        on_hide_chip=MagicMock(),
+        on_open_details=MagicMock(),
+        on_toggle_provider=MagicMock(),
+        on_quit=MagicMock(),
+        prefs=prefs,
+    )
+    tray._tray.setIcon = MagicMock(wraps=tray._tray.setIcon)  # type: ignore[method-assign]
+    tray._tray.setToolTip = MagicMock(wraps=tray._tray.setToolTip)  # type: ignore[method-assign]
+
+    tray.update([], [], notify=False)
+    tray.update([], [], notify=False)
+    tray.update([], [], notify=False)
+
+    assert tray._tray.setIcon.call_count == 1
+    assert tray._tray.setToolTip.call_count <= 1
+
+    tray._tray.hide()
+    tray._menu.deleteLater()

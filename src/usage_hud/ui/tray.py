@@ -119,6 +119,8 @@ class TrayController:
         self._tray.setContextMenu(self._menu)
         self._tray.activated.connect(self._activated)
         self._last_codes: set[str] = set()
+        self._last_icon_image = None
+        self._last_tooltip = "Usage HUD"
         self._tray.setToolTip("Usage HUD")
         self._rebuild_menu([])
         self._tray.show()
@@ -250,7 +252,14 @@ class TrayController:
         elif self._chip_visible:
             self._snooze_label = ""
         self._projections = projections or []
-        self._tray.setIcon(make_status_icon(snapshots, alerts))
+        # setIcon/setToolTip are synchronous calls into Explorer; every one
+        # is a chance to hang when Explorer is busy (resume from standby), so
+        # only make them when something actually changed.
+        icon = make_status_icon(snapshots, alerts)
+        icon_image = icon.pixmap(32, 32).toImage()
+        if icon_image != self._last_icon_image:
+            self._tray.setIcon(icon)
+            self._last_icon_image = icon_image
         self._rebuild_menu(snapshots)
 
         lines = [compact_title(snapshots, alerts)]
@@ -281,7 +290,10 @@ class TrayController:
         lines.append("")
         lines.append("Click icon → pinned details")
         lines.append("Right-click → Providers / Hide chip")
-        self._tray.setToolTip("\n".join(lines))
+        tooltip = "\n".join(lines)
+        if tooltip != self._last_tooltip:
+            self._tray.setToolTip(tooltip)
+            self._last_tooltip = tooltip
 
         if not notify:
             return

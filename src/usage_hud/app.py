@@ -123,6 +123,7 @@ class UsageHudApp:
         self.refresh()
 
     def _tick_ui(self) -> None:
+        _arm_hang_dump()
         if self._snooze.active and not self._snooze.forever:
             self._snooze = self.snooze_store.load()
             if not self._snooze.active and self.settings.ui_mode == "chip":
@@ -177,14 +178,30 @@ class UsageHudApp:
         QApplication.instance().quit()
 
 
+_HANG_DUMP_SECONDS = 20
+_hang_log = None
+
+
+def _arm_hang_dump() -> None:
+    """Re-armed by the UI thread every couple of seconds. If the UI thread
+    ever stops for longer than _HANG_DUMP_SECONDS, faulthandler's own watchdog
+    thread writes every thread's stack to crash.log — showing exactly where
+    the window got stuck (it works even if the main thread is blocked in a
+    system call)."""
+    if _hang_log is not None:
+        faulthandler.dump_traceback_later(_HANG_DUMP_SECONDS, file=_hang_log)
+
+
 def _install_crash_log(settings: Settings) -> None:
     """pythonw has no console, so a crash used to vanish without a trace."""
+    global _hang_log
     try:
         settings.state_dir.mkdir(parents=True, exist_ok=True)
         log = open(settings.state_dir / "crash.log", "a", buffering=1, encoding="utf-8")  # noqa: SIM115
     except OSError:
         return
     faulthandler.enable(log)
+    _hang_log = log
 
     def _hook(exc_type, exc, tb) -> None:
         log.write(f"\n--- {datetime.now().isoformat(timespec='seconds')} ---\n")
