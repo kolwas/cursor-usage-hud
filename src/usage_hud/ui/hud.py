@@ -293,6 +293,18 @@ class WeatherPanel(QWidget):
                 self.collapse()
         return super().eventFilter(obj, event)
 
+    @staticmethod
+    def _live_screen(screen: QScreen | None) -> QScreen | None:
+        """The cached target screen, or None once its monitor was unplugged —
+        a QScreen outlives the display only as a dead wrapper that raises
+        "already deleted" on first use (seen in crash.log after a dock/undock)."""
+        if screen is None:
+            return None
+        try:
+            return screen if screen in QGuiApplication.screens() else None
+        except RuntimeError:
+            return None
+
     def _flee_eligible(self) -> bool:
         return (
             self._flee_enabled
@@ -337,7 +349,11 @@ class WeatherPanel(QWidget):
         if not near:
             return
 
-        screen = self._target_screen or screen_under_cursor() or QGuiApplication.primaryScreen()
+        screen = (
+            self._live_screen(self._target_screen)
+            or screen_under_cursor()
+            or QGuiApplication.primaryScreen()
+        )
         if screen is None:
             return
         avail = screen.availableGeometry()
@@ -500,7 +516,7 @@ class WeatherPanel(QWidget):
             # _check_single_screen_proximity's own hover-triggered move is
             # allowed to bring it back.
             return
-        screen = self._target_screen or idle_screen()
+        screen = self._live_screen(self._target_screen) or idle_screen()
         if screen is None:
             return
         # If somehow on the active screen and we have another, flip.
