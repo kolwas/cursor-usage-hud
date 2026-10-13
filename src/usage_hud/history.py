@@ -292,19 +292,17 @@ class HistoryStore:
     def _merge_source_entries(
         samples: list[dict[str, Any]], provider_id: str, entries: list[dict[str, Any]]
     ) -> None:
-        """Replace this provider's legacy self-sampled entries with the
-        source's own timestamped readings (idempotent — a reading is added
-        once). Entries from a live source are real readings too and stay."""
+        """Replace this provider's self-sampled and log-derived entries with
+        the source's own timestamped readings, rebuilt in full each time (so
+        an improved window estimate also corrects older entries, and a
+        reading is never duplicated). Entries from a live source are real
+        readings too and stay."""
         samples[:] = [
-            s
-            for s in samples
-            if s.get("provider_id") != provider_id or s.get("src") in {"log", "live"}
+            s for s in samples if s.get("provider_id") != provider_id or s.get("src") == "live"
         ]
         known = {s["ts"] for s in samples if s.get("provider_id") == provider_id}
-        added = [e for e in entries if e["ts"] not in known]
-        if added:
-            samples.extend(added)
-            samples.sort(key=lambda s: _parse_ts(s["ts"]))
+        samples.extend(e for e in entries if e["ts"] not in known)
+        samples.sort(key=lambda s: _parse_ts(s["ts"]))
 
     def series(
         self,

@@ -276,12 +276,12 @@ def test_old_reading_of_a_short_window_is_marked_stale_but_a_weekly_one_is_not(t
     now = _utc(2026, 9, 15, 13)
     _write_history(
         tmp_path,
-        [{"t": _ms(now - timedelta(hours=3)), "u": {"fh": 100, "sd": 24}}],
+        [{"t": _ms(now - timedelta(hours=1)), "u": {"fh": 100, "sd": 24}}],
         monkeypatch,
     )
     snap = anthropic.snapshot_from_desktop_history(now, title="Claude")
     by_key = {m.key: m for m in snap.metrics}
-    # 3h of silence: a 5h gauge may have rolled over and refilled, a 7d one has not.
+    # 1h of silence: a 5h gauge may have rolled over and refilled, a 7d one has not yet.
     assert by_key["five_hour"].stale is True
     assert by_key["seven_day"].stale is False
 
@@ -347,3 +347,31 @@ def test_history_entries_carry_the_logs_own_timestamps(tmp_path, monkeypatch):
     entries = snap.raw["history_entries"]
     assert [e["ts"] for e in entries] == [t0.isoformat(), t1.isoformat()]
     assert entries[1]["metrics"][0]["cycle_end"] == (t0 + timedelta(hours=5)).isoformat()
+
+
+def test_idle_zero_readings_do_not_push_a_weekly_reset_later():
+    base = _utc(2026, 10, 12, 14)
+    now = base + timedelta(days=1)
+    samples = [
+        (base - timedelta(days=3), {"sd": 52}),
+        (base, {"sd": 0}),
+        (base + timedelta(hours=16), {"sd": 0}),
+        (base + timedelta(hours=20), {"sd": 0}),
+    ]
+    end = anthropic.infer_window_end(samples, "sd", timedelta(days=7), now, anchored=True)
+    assert end == base + timedelta(days=7)
+    # The 5h window still opens on first use: the latest zero wins there.
+    end5 = anthropic.infer_window_end(samples, "sd", timedelta(hours=5), now)
+    assert end5 is None or end5 > now
+
+
+def test_weekly_reading_goes_stale_after_two_hours_not_seventeen(tmp_path, monkeypatch):
+    now = _utc(2026, 9, 15, 13)
+    _write_history(
+        tmp_path,
+        [{"t": _ms(now - timedelta(hours=8)), "u": {"fh": 0, "sd": 0}}],
+        monkeypatch,
+    )
+    snap = anthropic.snapshot_from_desktop_history(now, title="Claude")
+    seven = {m.key: m for m in snap.metrics}["seven_day"]
+    assert seven.stale is True

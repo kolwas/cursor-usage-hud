@@ -42,6 +42,9 @@ WINDOWS: tuple[tuple[str, str, str, timedelta], ...] = (
 
 # A log older than this is reported as stale rather than as the current truth.
 STALE_AFTER = timedelta(minutes=20)
+_MAX_FRESH_AGE = timedelta(hours=2)
+# Windows that reset on a fixed weekly cadence (see infer_window_end).
+_ANCHORED_LOG_KEYS = frozenset({"sd"})
 
 _TIER_RE = re.compile(r"^(max|pro|free|team)(?:_(\d+)x)?$")
 
@@ -208,8 +211,16 @@ def infer_window_end(
     log_key: str,
     span: timedelta,
     now: datetime,
+    *,
+    anchored: bool = False,
 ) -> datetime | None:
     """Estimate when a rolling window opened, from the local percent series.
+
+    ``anchored`` is for windows that reset on a fixed calendar cadence (the
+    weekly one) rather than opening on first use (the 5h one): there, a run
+    of consecutive zero readings is ONE window sitting idle, so its reset is
+    the run's first zero — not the latest, which would push the estimated
+    reset later with every idle sample.
 
     The window start is the LAST reset visible in the log: either a drop in
     utilization, or a zero sample — not just the last *decrease*, because a
@@ -246,6 +257,8 @@ def infer_window_end(
 
     start_idx: int | None = None
     for i, (_, value) in enumerate(points):
+        if anchored and value == 0 and i > 0 and points[i - 1][1] == 0:
+            continue
         if value == 0 or (i > 0 and value < points[i - 1][1]):
             start_idx = i
     if start_idx is None:
@@ -282,7 +295,9 @@ def history_entries_from_log(
                 value = float(raw_value)
             except (TypeError, ValueError):
                 continue
-            end = infer_window_end(samples[: i + 1], log_key, span, ts)
+            end = infer_window_end(
+                samples[: i + 1], log_key, span, ts, anchored=log_key in _ANCHORED_LOG_KEYS
+            )
             metrics.append(
                 {
                     "key": key,
@@ -348,11 +363,14 @@ def snapshot_from_desktop_history(
             pct = float(last_usage[log_key])
         except (TypeError, ValueError):
             continue
-        cycle_end = infer_window_end(samples, log_key, span, now)
-        # Old relative to THIS window: half an hour of silence says little
-        # about a weekly gauge but a lot about a 5h one that may have rolled
-        # over and refilled since.
-        metric_stale = age > max(STALE_AFTER, span * 0.1)
+        cycle_end = infer_window_end(
+            samples, log_key, span, now, anchored=log_key in _ANCHORED_LOG_KEYS
+        )
+        # Old relative to THIS window, but never more than a couple of hours:
+        # Desktop only logs while it runs, so a long silence means unlogged
+        # usage even on the weekly gauge — "0% fresh" after 8h of silence
+        # while Claude Code is in constant use is simply wrong.
+        metric_stale = age > max(STALE_AFTER, min(span * 0.1, _MAX_FRESH_AGE))
         if age > span:
             # Silent for longer than the window itself: that window has
             # certainly renewed, so the old percent belongs to a window that
