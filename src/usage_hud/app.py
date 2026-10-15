@@ -10,6 +10,7 @@ from datetime import datetime
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
+from usage_hud import lifecycle
 from usage_hud.alerts import evaluate_alerts
 from usage_hud.branding import APP_NAME, DESKTOP_FILE_NAME, app_icon
 from usage_hud.config import Settings
@@ -175,6 +176,7 @@ class UsageHudApp:
     def quit(self) -> None:
         self._timer.stop()
         self._ui_timer.stop()
+        self.panel.allow_close()
         QApplication.instance().quit()
 
 
@@ -222,7 +224,9 @@ def run() -> int:
     # Helps Plasma map the Status Notifier item to the .desktop file.
     app.setDesktopFileName(DESKTOP_FILE_NAME)
 
+    lifecycle.start(settings.state_dir)
     if not QSystemTrayIcon.isSystemTrayAvailable():
+        lifecycle.no_tray(settings.state_dir)
         print(
             "No system tray available.\n"
             "KDE Plasma: add a System Tray (Status Notifier) widget to the panel.\n"
@@ -231,5 +235,17 @@ def run() -> int:
         )
         return 2
 
-    _ = UsageHudApp(settings)
+    app.aboutToQuit.connect(lambda: lifecycle.clean_exit(settings.state_dir))
+    pulse_timer = QTimer()
+    pulse_timer.setInterval(60_000)
+    pulse_timer.timeout.connect(lambda: lifecycle.pulse(settings.state_dir))
+    pulse_timer.start()
+
+    hud = UsageHudApp(settings)
+
+    def _session_ending(*_args) -> None:
+        lifecycle.session_ending(settings.state_dir)
+        hud.panel.allow_close()
+
+    app.commitDataRequest.connect(_session_ending)
     return app.exec()

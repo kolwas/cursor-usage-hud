@@ -130,6 +130,7 @@ class WeatherPanel(QWidget):
         self._flee_enabled = True
         self._pinned_details = False
         self._target_screen: QScreen | None = None
+        self._allow_close = False
         self._snapshots: list[ProviderSnapshot] = []
         self._projections: list[BurnProjection] = []
         self._alerts: list[Alert] = []
@@ -411,7 +412,17 @@ class WeatherPanel(QWidget):
         self._drag_offset = None
         super().mouseReleaseEvent(event)
 
+    def allow_close(self) -> None:
+        """Let the next close through. Qt asks every window to close before
+        quitting the app or ending the Windows session; a window that vetoes
+        that (as closeEvent does for a plain Alt+F4) blocks the quit, and a
+        blocked logoff gets the process force-killed."""
+        self._allow_close = True
+
     def closeEvent(self, event) -> None:  # noqa: N802
+        if self._allow_close:
+            event.accept()
+            return
         # Closing does not quit — offer timed hide at the window.
         event.ignore()
         menu = QMenu(self)
