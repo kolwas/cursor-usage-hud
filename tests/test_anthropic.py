@@ -375,3 +375,21 @@ def test_weekly_reading_goes_stale_after_two_hours_not_seventeen(tmp_path, monke
     snap = anthropic.snapshot_from_desktop_history(now, title="Claude")
     seven = {m.key: m for m in snap.metrics}["seven_day"]
     assert seven.stale is True
+
+
+def test_log_is_found_in_the_newer_claude_data_folder(tmp_path, monkeypatch):
+    """Regression: Claude Desktop 2.42 moved its user-data dir to
+    Local/Claude-Data/claude_<family>, so the HUD saw "no usage log"."""
+    if anthropic.sys.platform != "win32":
+        return
+    local = tmp_path / "Local"
+    new_dir = local / "Claude-Data" / "claude_pzs8sxrjxfjjc"
+    new_dir.mkdir(parents=True)
+    (new_dir / "plan-usage-history.json").write_text(
+        json.dumps({"version": 2, "samples": []}), encoding="utf-8"
+    )
+    (local / "Packages" / "Claude_pzs8sxrjxfjjc").mkdir(parents=True)  # emptied old package dir
+    monkeypatch.delenv("CLAUDE_DESKTOP_DIR", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(local))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "Roaming"))
+    assert anthropic.find_plan_usage_history() == new_dir / "plan-usage-history.json"

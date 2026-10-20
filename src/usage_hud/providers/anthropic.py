@@ -65,6 +65,12 @@ def claude_desktop_roots() -> list[Path]:
         local = Path(os.environ.get("LOCALAPPDATA") or "")
         roaming = Path(os.environ.get("APPDATA") or "")
         # MSIX / Store package virtualizes Roaming\Claude under LocalCache.
+        # Newer builds (2.42+) moved the user-data dir out of the package to
+        # Local\Claude-Data\claude_<package family>; the old LocalCache copy is
+        # deleted on that migration, so look here first.
+        claude_data = local / "Claude-Data"
+        if claude_data.is_dir():
+            roots.extend(sorted(claude_data.glob("claude_*")))
         packages = local / "Packages"
         if packages.is_dir():
             for pkg in packages.glob("Claude_*"):
