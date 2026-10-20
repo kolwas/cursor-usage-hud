@@ -61,16 +61,23 @@ def test_provider_uses_live_usage_when_it_is_available(tmp_path, monkeypatch):
     assert [(m.key, m.percent_used) for m in snap.metrics] == [("five_hour", 12.0)]
 
 
-def test_unimplemented_live_fetch_falls_back_to_the_desktop_log(tmp_path, monkeypatch):
+def test_unavailable_live_fetch_falls_back_to_the_desktop_log(tmp_path, monkeypatch):
     now = datetime.now(timezone.utc)
     _isolate(
         tmp_path,
         monkeypatch,
         [{"t": int(now.timestamp() * 1000), "u": {"fh": 9, "sd": 30}}],
     )
+
+    def unavailable():
+        raise LiveUsageUnavailable("sign-in expired")
+
+    # Always stubbed: a test must never reach the real function, which would
+    # read the developer's real sign-in and call the real network.
+    monkeypatch.setattr(anthropic_live, "fetch_live_usage", unavailable)
     snap = anthropic.AnthropicProvider(live=True).fetch()
     assert snap.ok and snap.raw["source"] == "plan-usage-history"
-    assert "live usage unavailable" in snap.message
+    assert "live usage unavailable (sign-in expired)" in snap.message
 
 
 def test_unexpected_failure_falls_back_without_leaking_its_message(tmp_path, monkeypatch):
