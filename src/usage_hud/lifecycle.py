@@ -51,6 +51,10 @@ def pulse(state_dir: Path) -> None:
     _write_pulse(state_dir, "running")
 
 
+def note(state_dir: Path, text: str) -> None:
+    _append(state_dir, text)
+
+
 def session_ending(state_dir: Path) -> None:
     _append(state_dir, "Windows session is ending (logoff/shutdown/restart)")
 

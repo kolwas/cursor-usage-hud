@@ -33,6 +33,7 @@ class UsageHudApp:
         )
         self.providers = discover_providers(settings)
         self._fetcher = BackgroundFetcher(self._apply)
+        self._last_live_state = ""
         self.history = HistoryStore(settings.state_dir / "history.json")
         self.snooze_store = SnoozeStore(settings.state_dir / "snooze.json")
         self._snooze = self.snooze_store.load()
@@ -139,12 +140,28 @@ class UsageHudApp:
         ):
             self.panel.dock_to_taskbar(force=False)
 
+    def _log_live_state(self, snapshots: list) -> None:
+        """Write Claude's live-usage state to lifecycle.log when it changes —
+        the chip falls back to the Desktop log silently, so this is where the
+        reason ("sign-in expired", "HTTP 401", ...) can be read."""
+        for snap in snapshots:
+            if snap.provider_id != "anthropic":
+                continue
+            if snap.raw.get("source") == "live":
+                state = "live usage ok"
+            else:
+                state = snap.raw.get("live_error", "")
+            if state and state != self._last_live_state:
+                lifecycle.note(self.settings.state_dir, f"claude: {state}")
+            self._last_live_state = state
+
     def refresh(self) -> None:
         """Ask for fresh data; the window is updated by _apply when it arrives."""
         self._fetcher.start(self.settings)
 
     def _apply(self, providers: list, snapshots: list) -> None:
         self.providers = providers
+        self._log_live_state(snapshots)
         shown = visible_snapshots(snapshots)
         self.history.record(shown)
         projections = self.history.projections(

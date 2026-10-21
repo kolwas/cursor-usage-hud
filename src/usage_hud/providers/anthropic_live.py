@@ -7,8 +7,7 @@ alternative, off unless the user turns on "claude_live_usage" in Settings.
 Everything here is split on purpose:
 
 * ``fetch_live_usage`` is the ONE function that touches a credential and the
-  network. It is deliberately left unimplemented in this file — it is written
-  and reviewed by the user (or a tool the user chose), not generated here.
+  network.
 * ``snapshot_from_live`` and ``AnthropicProvider.fetch`` only consume the plain
   ``LiveWindow`` values it returns, so they are testable with synthetic data.
 
@@ -27,8 +26,15 @@ Rules for the implementation of ``fetch_live_usage``:
 
 from __future__ import annotations
 
+import json
+import time
+import urllib.error
+import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
 from usage_hud.models import Metric, ProviderSnapshot
 
@@ -51,14 +57,103 @@ class LiveWindow:
     resets_at: datetime | None = None
 
 
-def fetch_live_usage() -> dict[str, LiveWindow]:
+_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+_TIMEOUT_SECONDS = 10
+# The HUD refreshes every few minutes; the usage numbers move far slower than
+# that, and a polite client keeps the request rate low.
+_CACHE_SECONDS = 300
+_cache: tuple[float, dict[str, LiveWindow]] | None = None
+
+
+def _credentials_path() -> Path:
+    return Path.home() / ".claude" / ".credentials.json"
+
+
+def _read_token(path: Path) -> str:
+    """The access token, held only in the caller's local variable. Raises
+    LiveUsageUnavailable (never including any file content) when there is no
+    usable sign-in. Never refreshes: that could sign Claude Code out."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        block = data["claudeAiOauth"]
+        token = block["accessToken"]
+        expires_ms = block.get("expiresAt")
+    except (OSError, ValueError, KeyError, TypeError):
+        raise LiveUsageUnavailable("no Claude Code sign-in found") from None
+    if not isinstance(token, str) or not token:
+        raise LiveUsageUnavailable("no Claude Code sign-in found")
+    if isinstance(expires_ms, (int, float)) and expires_ms / 1000.0 <= time.time():
+        raise LiveUsageUnavailable(
+            "Claude Code sign-in expired - use Claude Code once to renew it"
+        )
+    return token
+
+
+def _parse_window(block: object) -> LiveWindow | None:
+    if not isinstance(block, dict):
+        return None
+    percent = block.get("utilization")
+    if isinstance(percent, bool) or not isinstance(percent, (int, float)):
+        return None
+    resets_at = None
+    raw_end = block.get("resets_at")
+    if isinstance(raw_end, str):
+        try:
+            resets_at = datetime.fromisoformat(raw_end.replace("Z", "+00:00"))
+        except ValueError:
+            resets_at = None
+        if resets_at is not None and resets_at.tzinfo is None:
+            resets_at = resets_at.replace(tzinfo=timezone.utc)
+    return LiveWindow(percent=float(percent), resets_at=resets_at)
+
+
+def fetch_live_usage(
+    *,
+    credentials_path: Path | None = None,
+    opener: Callable[..., Any] = urllib.request.urlopen,
+) -> dict[str, LiveWindow]:
     """Return ``{"five_hour": LiveWindow, "seven_day": LiveWindow}`` (either may
     be missing). See the module docstring for the rules.
 
-    NOT IMPLEMENTED HERE — to be filled in by the user. Until then the option
-    is harmless: it raises, and the HUD keeps using the Desktop log.
+    The only place in the app that reads a sign-in token and the only request
+    to Anthropic. Every failure becomes ``LiveUsageUnavailable`` with a fixed,
+    secret-free message; the HUD then falls back to the Desktop log.
     """
-    raise LiveUsageUnavailable("live usage is enabled but fetch_live_usage() is not implemented")
+    global _cache
+    if _cache is not None and time.monotonic() - _cache[0] < _CACHE_SECONDS:
+        return _cache[1]
+
+    token = _read_token(credentials_path or _credentials_path())
+    request = urllib.request.Request(
+        _USAGE_URL,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "anthropic-beta": "oauth-2025-04-20",
+            "Accept": "application/json",
+            "User-Agent": "usage-hud",
+        },
+    )
+    del token
+    try:
+        with opener(request, timeout=_TIMEOUT_SECONDS) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raise LiveUsageUnavailable(f"Anthropic answered HTTP {exc.code}") from None
+    except (urllib.error.URLError, TimeoutError, OSError):
+        raise LiveUsageUnavailable("Anthropic not reachable") from None
+    except ValueError:
+        raise LiveUsageUnavailable("unexpected reply from Anthropic") from None
+
+    usage: dict[str, LiveWindow] = {}
+    if isinstance(payload, dict):
+        for key, _label in LIVE_WINDOWS:
+            window = _parse_window(payload.get(key))
+            if window is not None:
+                usage[key] = window
+    if not usage:
+        raise LiveUsageUnavailable("unexpected reply from Anthropic")
+    _cache = (time.monotonic(), usage)
+    return usage
 
 
 def snapshot_from_live(

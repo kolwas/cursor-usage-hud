@@ -450,6 +450,7 @@ class AnthropicProvider(Provider):
         extra_usage = bool(account.get("hasExtraUsageEnabled"))
 
         live_note = ""
+        live_error = ""
         if self.live:
             # Network + sign-in boundary: whatever goes wrong in there must
             # fall back to the Desktop log, never take the whole refresh down.
@@ -462,12 +463,13 @@ class AnthropicProvider(Provider):
                 )
             except anthropic_live.LiveUsageUnavailable as exc:
                 live = None
-                live_note = f" · live usage unavailable ({exc})"
+                live_error = f"live usage unavailable ({exc})"
             except Exception as exc:  # noqa: BLE001
                 live = None
-                live_note = f" · live usage failed ({type(exc).__name__})"
+                live_error = f"live usage failed ({type(exc).__name__})"
             if live is not None:
                 return live
+            live_note = f" · {live_error}"
 
         snapshot = snapshot_from_desktop_history(
             now,
@@ -476,6 +478,8 @@ class AnthropicProvider(Provider):
         )
         if snapshot is not None:
             snapshot.message += live_note
+            if live_error:
+                snapshot.raw["live_error"] = live_error
             return snapshot
 
         return ProviderSnapshot(

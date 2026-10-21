@@ -36,3 +36,8 @@ def test_unwritable_state_dir_never_raises(tmp_path):
     lifecycle.start(missing)
     lifecycle.pulse(missing)
     lifecycle.clean_exit(missing)
+
+
+def test_note_appends_a_line(tmp_path):
+    lifecycle.note(tmp_path, "claude: live usage ok")
+    assert "claude: live usage ok" in _log(tmp_path)

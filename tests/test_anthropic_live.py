@@ -134,10 +134,18 @@ def test_live_readings_stay_in_history_when_the_log_is_merged_later(tmp_path, mo
     assert [s["src"] for s in store._read()["samples"]] == ["log", "live"]
 
 
-def test_unavailable_error_message_is_what_the_user_sees():
-    try:
-        anthropic_live.fetch_live_usage()
-    except LiveUsageUnavailable as exc:
-        assert "not implemented" in str(exc)
-    else:
-        raise AssertionError("the unimplemented stub must raise")
+
+def test_fallback_snapshot_records_why_live_failed(tmp_path, monkeypatch):
+    now = datetime.now(timezone.utc)
+    _isolate(
+        tmp_path,
+        monkeypatch,
+        [{"t": int(now.timestamp() * 1000), "u": {"fh": 9, "sd": 30}}],
+    )
+
+    def unavailable():
+        raise LiveUsageUnavailable("Anthropic answered HTTP 401")
+
+    monkeypatch.setattr(anthropic_live, "fetch_live_usage", unavailable)
+    snap = anthropic.AnthropicProvider(live=True).fetch()
+    assert snap.raw["live_error"] == "live usage unavailable (Anthropic answered HTTP 401)"
