@@ -39,16 +39,25 @@ from usage_hud.ui.formatters import (
     reset_eta_parts,
     reset_fraction_remaining,
 )
+from usage_hud.ui.raven_gags import GAG_NAMES, gag_frame_count, pick_gag
 from usage_hud.ui.raven_glyph import (
     FLY_CHANCE,
     FLY_FRAME_COUNT,
     JUMP_CHANCE,
     JUMP_FRAME_COUNT,
+    JUMP_LENGTH,
+    PATH_X_MAX,
+    PATH_X_MIN,
     SCENE_DISPLAY_HEIGHT,
     SCENE_DISPLAY_WIDTH,
-    at_path_centre,
+    WALK_CYCLE_STEPS,
+    at_gag_spot,
     at_path_right_end,
+    jump_end_x,
+    jump_start_step,
     raven_scene_html,
+    step_for_x,
+    walk_pose,
 )
 
 _ETA_COLOR = {"bad": "#ff8a80", "warn": "#ffb020", "ok": "#8ec8ff", "tentative": "#9aa3b2"}
@@ -181,6 +190,11 @@ class WeatherPanel(QWidget):
         self._raven_mode = "walk"
         self._raven_step = 0
         self._raven_jump_frame = 0
+        self._raven_jump_x0 = 0.0
+        self._raven_jump_left = False
+        self._raven_gag = "peck"
+        self._raven_gag_frame = 0
+        self._demo_scene = 0
         self._raven_fly_frame = 0
         self._raven_mark = QLabel()
         self._raven_mark.setTextFormat(Qt.TextFormat.RichText)
@@ -253,30 +267,58 @@ class WeatherPanel(QWidget):
         self._alert_cycle_timer.start()
 
     def _raven_mark_html(self) -> str:
-        if self._raven_mode == "fly":
+        common = {"line_color": _RAVEN_MARK_COLOR, "eye_color": _RAVEN_MARK_EYE}
+        if self._raven_mode == "gag":
             return raven_scene_html(
-                line_color=_RAVEN_MARK_COLOR,
-                eye_color=_RAVEN_MARK_EYE,
-                mode="fly",
-                index=self._raven_fly_frame,
+                **common, mode="gag", gag=self._raven_gag, index=self._raven_gag_frame
             )
+        if self._raven_mode == "fly":
+            return raven_scene_html(**common, mode="fly", index=self._raven_fly_frame)
         if self._raven_mode == "jump":
             return raven_scene_html(
-                line_color=_RAVEN_MARK_COLOR,
-                eye_color=_RAVEN_MARK_EYE,
+                **common,
                 bush_color=_RAVEN_BUSH_COLOR,
                 mode="jump",
                 index=self._raven_jump_frame,
+                x0=self._raven_jump_x0,
+                facing_left=self._raven_jump_left,
             )
-        return raven_scene_html(
-            line_color=_RAVEN_MARK_COLOR,
-            eye_color=_RAVEN_MARK_EYE,
-            mode="walk",
-            index=self._raven_step,
-        )
+        return raven_scene_html(**common, mode="walk", index=self._raven_step)
+
+    def _start_jump(self) -> None:
+        """Hop over the bush from where the raven is, the way it is heading
+        — or the other way when there is not room left to land."""
+        x, _y, _tilt, _leg_a, _leg_b, left = walk_pose(self._raven_step)
+        if not left and x + JUMP_LENGTH > PATH_X_MAX:
+            left = True
+        elif left and x - JUMP_LENGTH < PATH_X_MIN:
+            left = False
+        self._raven_jump_x0 = x
+        self._raven_jump_left = left
+        self._raven_jump_frame = 0
+        self._raven_mode = "jump"
+
+    def _start_gag(self, name: str) -> None:
+        self._raven_gag = name
+        self._raven_gag_frame = 0
+        self._raven_mode = "gag"
+
+    def _start_fly(self) -> None:
+        self._raven_fly_frame = 0
+        self._raven_mode = "fly"
 
     def _tick_raven_mark(self) -> None:
-        if self._raven_mode == "fly":
+        if self._raven_mode == "gag":
+            self._raven_gag_frame += 1
+            if self._raven_gag_frame >= gag_frame_count(self._raven_gag):
+                self._raven_mode = "walk"
+                self._raven_gag_frame = 0
+                if self._raven_gag == "shoo":
+                    # Chased off, it lands at the left end of the path.
+                    self._raven_step = 0
+                # The other scenes happen where it stands, mid-path — the
+                # pace simply carries on from the step it stopped at.
+        elif self._raven_mode == "fly":
             self._raven_fly_frame += 1
             if self._raven_fly_frame >= FLY_FRAME_COUNT:
                 # It lands at the left end of the path, facing right — the
@@ -287,20 +329,40 @@ class WeatherPanel(QWidget):
         elif self._raven_mode == "jump":
             self._raven_jump_frame += 1
             if self._raven_jump_frame >= JUMP_FRAME_COUNT:
-                # Land back into the walk cycle a little past the bush,
-                # continuing in the direction the hop was drawn (always
-                # left-to-right — see raven_glyph._JUMP_ARC).
+                # Carry on walking from exactly where the hop landed, in
+                # the direction it went.
                 self._raven_mode = "walk"
                 self._raven_jump_frame = 0
-                self._raven_step += 4
+                self._raven_step = step_for_x(
+                    jump_end_x(self._raven_jump_x0, self._raven_jump_left), self._raven_jump_left
+                )
         else:
             self._raven_step += 1
-            if at_path_centre(self._raven_step) and random.random() < JUMP_CHANCE:
-                self._raven_mode = "jump"
-                self._raven_jump_frame = 0
+            if jump_start_step(self._raven_step) and random.random() < JUMP_CHANCE:
+                self._start_jump()
+            elif at_gag_spot(self._raven_step) and (gag := pick_gag(random.random())):
+                self._start_gag(gag)
             elif at_path_right_end(self._raven_step) and random.random() < FLY_CHANCE:
-                self._raven_mode = "fly"
-                self._raven_fly_frame = 0
+                self._start_fly()
+        self._raven_mark.setText(self._raven_mark_html())
+
+    def _play_next_scene(self) -> None:
+        """Ctrl+click on the raven plays the next scene right away, so they
+        can be watched without waiting for the dice."""
+        if self._raven_mode != "walk":
+            return
+        scenes = ("jump", *GAG_NAMES, "fly")
+        name = scenes[self._demo_scene % len(scenes)]
+        self._demo_scene += 1
+        if name == "jump":
+            self._raven_step = 2
+            self._start_jump()
+        elif name == "fly":
+            self._raven_step = WALK_CYCLE_STEPS
+            self._start_fly()
+        else:
+            self._raven_step = WALK_CYCLE_STEPS // 2
+            self._start_gag(name)
         self._raven_mark.setText(self._raven_mark_html())
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
@@ -409,6 +471,13 @@ class WeatherPanel(QWidget):
         super().paintEvent(event)
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and event.modifiers() & Qt.KeyboardModifier.ControlModifier
+            and self._raven_mark.geometry().contains(event.position().toPoint())
+        ):
+            self._play_next_scene()
+            return
         if event.button() == Qt.MouseButton.LeftButton:
             if event.modifiers() & Qt.KeyboardModifier.AltModifier:
                 self._drag_offset = (
@@ -907,7 +976,7 @@ class WeatherPanel(QWidget):
                 proj = proj_map.get((snap.provider_id, metric.key))
                 if proj is None:
                     continue
-                if proj.rocketing or (proj.will_exhaust and proj.confident):
+                if proj.is_alarming:
                     found.append((snap, metric, proj))
 
         def sort_key(item: tuple[ProviderSnapshot, Metric, BurnProjection]) -> tuple[int, float]:
@@ -927,8 +996,7 @@ class WeatherPanel(QWidget):
             # jumping to a different gauge.
             # A bird that is away (or mid-flap) is not interrupted for it.
             if self._raven_mode == "walk":
-                self._raven_mode = "jump"
-                self._raven_jump_frame = 0
+                self._start_jump()
         self._render()
 
     # Chip table columns: Label | Clock | Days | Hours | Minutes | Percent |
@@ -1055,7 +1123,7 @@ class WeatherPanel(QWidget):
                 # on the small chart/ETA cells was too easy to miss at a
                 # glance; a tentative prediction does not tint, since it
                 # hasn't earned the verdict yet.
-                highlight = bool(proj and (proj.rocketing or (proj.will_exhaust and proj.confident)))
+                highlight = bool(proj and proj.is_alarming)
                 rows.append(
                     self._chip_row(
                         f'<span style="color:#8a93a6;">{label}</span>',

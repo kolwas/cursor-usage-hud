@@ -110,7 +110,7 @@ def test_alarming_row_gets_a_whole_row_background_tint():
             panel.deleteLater()
 
     calm_html = _chip_html_for(_proj())
-    rocketing_html = _chip_html_for(_proj(rocketing=True))
+    rocketing_html = _chip_html_for(_proj(rocketing=True, days_to_exhaust=10.0))
     at_risk_html = _chip_html_for(_proj(will_exhaust=True, confident=True))
     tentative_at_risk_html = _chip_html_for(_proj(will_exhaust=True, confident=False))
 
@@ -155,7 +155,7 @@ def test_alert_chart_appears_next_to_the_raven_only_when_something_is_hot(tmp_pa
     finally:
         calm.deleteLater()
 
-    rocketing = _panel_for(_proj(rocketing=True))
+    rocketing = _panel_for(_proj(rocketing=True, days_to_exhaust=10.0))
     try:
         assert rocketing._alert_chart.isHidden() is False
         text = rocketing._alert_chart.text()
@@ -336,7 +336,7 @@ def test_rocketing_gauge_gets_a_longer_turn_and_a_visible_ring():
     spiking = WeatherPanel()
     try:
         spiking._snapshots = [snap]
-        spiking._projections = [_proj(rocketing=True)]
+        spiking._projections = [_proj(rocketing=True, days_to_exhaust=10.0)]
         spiking._render()
         assert spiking._alert_cycle_timer.interval() == _ALERT_CYCLE_HOT_MS
     finally:
@@ -347,3 +347,47 @@ def test_rocketing_gauge_gets_a_longer_turn_and_a_visible_ring():
         [(0.0, 5.0), (1.0, 10.0)], 5.0, 20.0, QColor("#5ddea0"), rocketing=True
     )
     assert calm_chart != hot_chart
+
+
+def test_a_spike_with_plenty_of_margin_is_not_an_alarm():
+    """Regression: Cla 5h showed the alert chart because of a short burst
+    although, at that pace, it would only run out hours AFTER the reset."""
+    safe = _proj(rocketing=True, days_left=0.16, days_to_exhaust=0.36, will_exhaust=False)
+    assert safe.is_alarming is False
+
+
+def test_a_spike_heading_for_the_cap_is_an_alarm():
+    heading_for_cap = _proj(rocketing=True, days_left=0.16, days_to_exhaust=0.10)
+    assert heading_for_cap.is_alarming is True
+
+
+def test_confirmed_risk_still_alarms_without_a_spike():
+    assert _proj(will_exhaust=True, confident=True).is_alarming is True
+    assert _proj(will_exhaust=True, confident=False).is_alarming is False
+
+
+def test_a_spike_with_unknown_margin_keeps_the_warning():
+    assert _proj(rocketing=True, days_to_exhaust=None).is_alarming is True
+
+
+def test_no_chart_and_no_row_tint_for_a_safe_spike():
+    from usage_hud.ui.hud import WeatherPanel
+
+    snap, metric = _snap_and_metric()
+    snap.metrics.append(metric)
+
+    def hot_gauges_for(proj: BurnProjection) -> list:
+        panel = WeatherPanel()
+        panel._snapshots = [snap]
+        panel._projections = [proj]
+        try:
+            return panel._hot_gauges(), WeatherPanel._CHIP_ALARM_BG in panel._chip_html()
+        finally:
+            panel.deleteLater()
+
+    safe_gauges, safe_tint = hot_gauges_for(_proj(rocketing=True, days_left=0.16, days_to_exhaust=0.36))
+    assert safe_gauges == [] and safe_tint is False
+    threatened_gauges, threatened_tint = hot_gauges_for(
+        _proj(rocketing=True, days_left=0.16, days_to_exhaust=0.10)
+    )
+    assert len(threatened_gauges) == 1 and threatened_tint is True

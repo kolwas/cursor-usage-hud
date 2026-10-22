@@ -10,6 +10,7 @@ detail there than a live, constantly-refreshed 16-24px icon has.
 from __future__ import annotations
 
 import base64
+from dataclasses import dataclass
 
 from PySide6.QtCore import QBuffer, QIODevice, QPointF, Qt
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap, QTransform
@@ -27,7 +28,7 @@ _LEG_B_LIFTED = ((16.0, 27.2), (15.4, 29.1))
 # the one shared layout the whole scene is built on — hud.py uses them to
 # size the QLabel that hosts it.
 SCENE_WIDTH = 68
-SCENE_HEIGHT = 44
+SCENE_HEIGHT = 54  # headroom above the raven for hops, wings and dropped props
 _SCALE = 1.05
 # The scene is drawn on the 68x44 grid above and shrunk as a whole to this
 # many on-screen pixels, so the walk path, hop arc and bush keep their
@@ -42,26 +43,55 @@ _WALK_X_MAX = SCENE_WIDTH - _RAVEN_BOX - 2.0
 _WALK_BOB = 2.2  # px the whole bird lifts on the "up" step of its stride
 _WALK_TILT = 3.5  # degrees leaned into the direction of travel
 WALK_CYCLE_STEPS = 16  # one leg of the pace (there and back is double this)
+# Public layout the gags (raven_gags) build on.
+RAVEN_BOX = _RAVEN_BOX
+PATH_X_MIN = _WALK_X_MIN
+PATH_X_MAX = _WALK_X_MAX
+CENTRE_X = (_WALK_X_MIN + _WALK_X_MAX) / 2.0  # raven's left edge at mid-path
+FLOOR_Y = _TOP_MARGIN + _RAVEN_BOX  # bottom of the standing raven
+FEET_PIVOT = (14.5 * _SCALE, 29.2 * _SCALE)  # where a peck rocks the body from
+LEG_A, LEG_B = _LEG_A, _LEG_B
+LEG_A_LIFTED, LEG_B_LIFTED = _LEG_A_LIFTED, _LEG_B_LIFTED
 
-# A short hop arc — (dx, dy, tilt) in pixels/degrees, relative to the bush
-# at the path's centre. Always left-to-right: which way the raven was
-# actually walking when it triggered the jump is not tracked, and a short
-# hop reversing tilt/direction was not worth the extra state for a
-# decoration nobody is meant to scrutinise that closely.
-_JUMP_ARC: tuple[tuple[float, float, float], ...] = (
-    (-15.0, 0.0, 0.0),
-    (-9.0, -4.0, -5.0),
-    (-3.0, -8.0, -2.0),
-    (0.0, -10.0, 2.0),
-    (4.0, -7.0, 5.0),
-    (9.0, -3.0, 3.0),
-    (14.0, 0.0, 0.0),
+# The hop over the bush starts from wherever the raven is walking, in the
+# direction it is walking: a crouch, a push-off, an arc over the bush with
+# the wings half open, a landing squash and a recovery. Per frame:
+# (dx along the hop, y, tilt, squash, wing, legs tucked). Mirrored for a
+# raven walking left.
+JUMP_LENGTH = 24.0
+_JUMP_FRAMES: tuple[tuple[float, float, float, float, str | None, bool], ...] = (
+    (0.0, 0.0, 0.0, 0.86, None, False),
+    (3.0, -4.0, -14.0, 1.08, "up", True),
+    (8.0, -10.0, -8.0, 1.0, "mid", True),
+    (13.0, -14.0, 0.0, 1.0, "mid", True),
+    (17.0, -12.0, 8.0, 1.0, "down", True),
+    (20.5, -7.0, 12.0, 1.0, "mid", True),
+    (23.0, -2.0, 6.0, 1.0, "up", False),
+    (24.0, 0.0, 0.0, 0.85, None, False),
+    (24.0, 0.0, 0.0, 1.0, None, False),
 )
-JUMP_FRAME_COUNT = len(_JUMP_ARC)
-# How often, of the times the raven crosses the middle of its path, it
+JUMP_FRAME_COUNT = len(_JUMP_FRAMES)
+_BUSH_SCALE = (0.55, 0.9, 1.0, 1.0, 1.0, 1.0, 1.0, 0.9, 0.6)
+# How often, at the point on its pace where a hop can start, the raven
 # hops over the bush instead of walking straight past — "raz na jakis
 # czas", not every single pass.
 JUMP_CHANCE = 1.0 / 5.0
+
+
+@dataclass(frozen=True)
+class RavenPose:
+    """Everything the renderer needs to draw the raven for one frame."""
+
+    x: float
+    y: float = 0.0
+    tilt: float = 0.0
+    squash: float = 1.0  # <1 flattened, >1 stretched (about the feet)
+    visible: bool = True
+    wing: str | None = None
+    leg_a: tuple[tuple[float, float], tuple[float, float]] = _LEG_A
+    leg_b: tuple[tuple[float, float], tuple[float, float]] = _LEG_B
+    facing_left: bool = False
+    pivot: tuple[float, float] | None = None  # tilt about this point
 
 
 # Flight: now and then, on reaching the right end of its path, the raven
@@ -168,24 +198,63 @@ def walk_pose(
     return x, y, tilt, leg_a, leg_b, facing_left
 
 
-def at_path_centre(step: int) -> bool:
-    """True on the one step per leg of the pace where the raven is
-    passing the bush's spot — where hud.py rolls the dice on JUMP_CHANCE
-    to switch into a jump instead of continuing to walk."""
-    cycle = step % (2 * WALK_CYCLE_STEPS)
-    half = WALK_CYCLE_STEPS // 2
-    return cycle in (half, WALK_CYCLE_STEPS + half)
+def at_gag_spot(step: int) -> bool:
+    """True on the one step per lap where the raven stands at the middle of
+    its path facing right — where the stationary gags (raven_gags) start."""
+    return step % (2 * WALK_CYCLE_STEPS) == WALK_CYCLE_STEPS // 2
 
 
-def jump_pose(frame: int) -> tuple[float, float, float, tuple, tuple]:
-    """(x, y, tilt, leg_a, leg_b) for one frame of the hop-over-the-bush
-    arc, relative to the bush's own position at the path's centre. Both
-    legs tuck up for the airborne middle frames."""
-    dx, y, tilt = _JUMP_ARC[frame % JUMP_FRAME_COUNT]
-    x = (_WALK_X_MIN + _WALK_X_MAX) / 2.0 + dx
-    airborne = 1 <= frame <= JUMP_FRAME_COUNT - 2
-    leg_a, leg_b = (_LEG_A_LIFTED, _LEG_B_LIFTED) if airborne else (_LEG_A, _LEG_B)
-    return x, y, tilt, leg_a, leg_b
+def jump_start_step(step: int) -> bool:
+    """True on the step per leg where a hop can start: early on each leg,
+    so there is room to land before the end of the path."""
+    return step % WALK_CYCLE_STEPS == 2
+
+
+def step_for_x(x: float, facing_left: bool) -> int:
+    """The walk step that puts the raven at ``x`` heading the given way — so
+    the pace resumes exactly where a hop or a gag left it."""
+    frac = (min(max(x, _WALK_X_MIN), _WALK_X_MAX) - _WALK_X_MIN) / (_WALK_X_MAX - _WALK_X_MIN)
+    steps = round(frac * WALK_CYCLE_STEPS)
+    return 2 * WALK_CYCLE_STEPS - steps if facing_left else steps
+
+
+def jump_end_x(x0: float, facing_left: bool) -> float:
+    return x0 - JUMP_LENGTH if facing_left else x0 + JUMP_LENGTH
+
+
+def jump_pose(frame: int, x0: float, facing_left: bool = False) -> RavenPose:
+    """One frame of the hop, starting from ``x0`` (where the raven was
+    walking) and heading right, or left when ``facing_left``."""
+    dx, y, tilt, squash, wing, tucked = _JUMP_FRAMES[frame % JUMP_FRAME_COUNT]
+    legs = (_LEG_A_LIFTED, _LEG_B_LIFTED) if tucked else (_LEG_A, _LEG_B)
+    return RavenPose(
+        x=x0 - dx if facing_left else x0 + dx,
+        y=y,
+        tilt=tilt,
+        squash=squash,
+        wing=wing,
+        leg_a=legs[0],
+        leg_b=legs[1],
+        facing_left=facing_left,
+    )
+
+
+def jump_bush(frame: int, x0: float, facing_left: bool) -> tuple[float, float]:
+    """(centre x, scale) of the bush for one frame: it sits ahead of the
+    raven, pops up as the raven crouches and sinks back after it lands."""
+    ahead = -12.0 if facing_left else 12.0
+    return x0 + _RAVEN_BOX / 2.0 + ahead, _BUSH_SCALE[frame % JUMP_FRAME_COUNT]
+
+
+def fly_raven_pose(frame: int) -> RavenPose:
+    visible, x, y, tilt, wing, legs_down = fly_pose(frame)
+    legs = (_LEG_A, _LEG_B) if legs_down else (_LEG_A_LIFTED, _LEG_B_LIFTED)
+    return RavenPose(x=x, y=y, tilt=tilt, visible=visible, wing=wing, leg_a=legs[0], leg_b=legs[1])
+
+
+def walk_raven_pose(step: int) -> RavenPose:
+    x, y, tilt, leg_a, leg_b, facing_left = walk_pose(step)
+    return RavenPose(x=x, y=y, tilt=tilt, leg_a=leg_a, leg_b=leg_b, facing_left=facing_left)
 
 
 def raven_path(s: float, *, detailed: bool = True) -> QPainterPath:
@@ -299,14 +368,61 @@ def paint_raven_solid(
     painter.drawEllipse(QPointF(ex * s, ey * s), max(1.0, 1.1 * s), max(1.0, 1.1 * s))
 
 
-def paint_bush(painter: QPainter, *, color: QColor, cx: float, cy: float) -> None:
-    """Three overlapping rounded lobes centred on (``cx``, ``cy``) in
-    pixels — just enough to read as a small shrub at this scale, no more
-    detail than the raven's own legs get."""
+def paint_bush(
+    painter: QPainter,
+    *,
+    color: QColor,
+    cx: float,
+    cy: float,
+    scale: float = 1.0,
+    berry_color: QColor | None = None,
+) -> None:
+    """A small shrub standing on (``cx``, ``cy``) — four overlapping lobes
+    and, when ``berry_color`` is given, a few berries. ``scale`` grows it
+    from the ground up."""
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(color)
-    for dx, dy, r in ((-4.0, 1.0, 4.0), (0.0, -1.5, 4.6), (4.0, 1.2, 4.0)):
-        painter.drawEllipse(QPointF(cx + dx, cy + dy), r, r)
+    for dx, dy, r in ((-5.5, -3.0, 4.4), (-1.6, -6.5, 5.4), (3.2, -5.4, 5.0), (6.0, -2.4, 3.8)):
+        painter.drawEllipse(QPointF(cx + dx * scale, cy + dy * scale), r * scale, r * scale)
+    if berry_color is not None and scale > 0.8:
+        painter.setBrush(berry_color)
+        for dx, dy in ((-3.5, -5.5), (1.5, -9.0), (5.5, -5.0)):
+            painter.drawEllipse(QPointF(cx + dx * scale, cy + dy * scale), 0.9, 0.9)
+
+
+def _draw_raven(painter: QPainter, pose: RavenPose, line_color: QColor, eye_color: QColor | None) -> None:
+    if not pose.visible:
+        return
+    painter.save()
+    painter.translate(pose.x, _TOP_MARGIN + pose.y)
+    if pose.facing_left:
+        # Mirror within the raven's own local box so it paces back the way
+        # it came instead of moonwalking.
+        painter.translate(_RAVEN_BOX, 0)
+        painter.scale(-1, 1)
+    if pose.squash != 1.0:
+        # Squash / stretch about the bottom centre: a flattened bird spreads
+        # sideways, a stretched one gets slimmer.
+        sx = 1.0 + (1.0 - pose.squash) * 0.55
+        painter.translate(_RAVEN_BOX / 2.0, _RAVEN_BOX)
+        painter.scale(sx, pose.squash)
+        painter.translate(-_RAVEN_BOX / 2.0, -_RAVEN_BOX)
+    pivot = QPointF(*(pose.pivot or (_RAVEN_BOX / 2.0, _RAVEN_BOX / 2.0)))
+    painter.translate(pivot)
+    painter.rotate(pose.tilt)
+    painter.translate(-pivot)
+    paint_raven_outline(
+        painter,
+        _SCALE,
+        line_color=line_color,
+        eye_color=eye_color,
+        legs=True,
+        leg_a=pose.leg_a,
+        leg_b=pose.leg_b,
+        wing=pose.wing,
+        wing_fill=_WING_FILL,
+    )
+    painter.restore()
 
 
 def raven_scene_html(
@@ -316,6 +432,9 @@ def raven_scene_html(
     bush_color: QColor | None = None,
     mode: str = "walk",
     index: int = 0,
+    gag: str | None = None,
+    x0: float | None = None,
+    facing_left: bool = False,
 ) -> str:
     """A standalone ``<img>`` tag of the raven's little scene — SCENE_WIDTH
     x SCENE_HEIGHT, transparent background (no plate, unlike the tray/badge
@@ -323,31 +442,27 @@ def raven_scene_html(
     WeatherPanel.paintEvent) — for dropping into a QLabel's rich text as
     the chip's side watermark (ui/hud.py).
 
-    ``mode="fly"``: ``index`` is a frame in 0..FLY_FRAME_COUNT-1 (see
-    fly_pose) — the raven flaps off the scene, is gone a few beats and
-    glides back in to land.
-
-    ``mode="walk"``: ``index`` is a step count (see walk_pose) — the raven
-    paces back and forth across the scene. ``mode="jump"``: ``index`` is a
-    frame in 0..JUMP_FRAME_COUNT-1 (see jump_pose) — the raven hops over a
-    bush drawn at the path's centre. WeatherPanel's own timer owns the mode
-    switch and the frame/step advance; this function only renders one
-    frame of whichever it's told.
+    ``mode="walk"``: ``index`` is a step count (see walk_pose). ``"jump"``:
+    ``index`` is a frame of the hop (see jump_pose) that starts at ``x0``
+    heading left or right. ``"fly"``: a frame of the flight (see fly_pose).
+    ``"gag"``: a frame of the named scene in raven_gags. WeatherPanel's own
+    timer owns the mode switch and the frame/step advance; this function
+    only renders one frame of whichever it's told.
     """
-    wing: str | None = None
-    visible = True
+    bush: tuple[float, float] | None = None
+    props: list = []
     if mode == "fly":
-        visible, x, y, tilt, wing, legs_down = fly_pose(index)
-        leg_a, leg_b = (_LEG_A, _LEG_B) if legs_down else (_LEG_A_LIFTED, _LEG_B_LIFTED)
-        facing_left = False
-        show_bush = False
+        pose = fly_raven_pose(index)
     elif mode == "jump":
-        x, y, tilt, leg_a, leg_b = jump_pose(index)
-        facing_left = False
-        show_bush = True
+        start = CENTRE_X if x0 is None else x0
+        pose = jump_pose(index, start, facing_left)
+        bush = jump_bush(index, start, facing_left)
+    elif mode == "gag":
+        from usage_hud.ui import raven_gags
+
+        pose, props = raven_gags.gag_frame(gag or "peck", index)
     else:
-        x, y, tilt, leg_a, leg_b, facing_left = walk_pose(index)
-        show_bush = False
+        pose = walk_raven_pose(index)
 
     pix = QPixmap(SCENE_DISPLAY_WIDTH, SCENE_DISPLAY_HEIGHT)
     pix.fill(QColor(0, 0, 0, 0))
@@ -355,37 +470,20 @@ def raven_scene_html(
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     painter.scale(SCENE_ZOOM, SCENE_ZOOM)
 
-    if show_bush and bush_color is not None:
-        bush_cx = (_WALK_X_MIN + _WALK_X_MAX) / 2.0 + _RAVEN_BOX / 2.0
-        paint_bush(painter, color=bush_color, cx=bush_cx, cy=_TOP_MARGIN + _RAVEN_BOX - 1.0)
+    if bush is not None and bush_color is not None:
+        paint_bush(
+            painter,
+            color=bush_color,
+            cx=bush[0],
+            cy=FLOOR_Y - 1.0,
+            scale=bush[1],
+            berry_color=eye_color,
+        )
+    _draw_raven(painter, pose, line_color, eye_color)
+    if props:
+        from usage_hud.ui import raven_gags
 
-    painter.save()
-    painter.translate(x, _TOP_MARGIN + y)
-    if not visible:
-        painter.restore()
-        painter.end()
-        return _pixmap_to_img_tag(pix)
-    if facing_left:
-        # Mirror within the raven's own local box so it paces back the way
-        # it came instead of moonwalking.
-        painter.translate(_RAVEN_BOX, 0)
-        painter.scale(-1, 1)
-    pivot = QPointF(_RAVEN_BOX / 2.0, _RAVEN_BOX / 2.0)
-    painter.translate(pivot)
-    painter.rotate(tilt)
-    painter.translate(-pivot)
-    paint_raven_outline(
-        painter,
-        _SCALE,
-        line_color=line_color,
-        eye_color=eye_color,
-        legs=True,
-        leg_a=leg_a,
-        leg_b=leg_b,
-        wing=wing,
-        wing_fill=_WING_FILL,
-    )
-    painter.restore()
+        raven_gags.paint_props(painter, props, line_color, _WING_FILL)
     painter.end()
     return _pixmap_to_img_tag(pix)
 

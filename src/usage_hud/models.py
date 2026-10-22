@@ -114,3 +114,23 @@ class BurnProjection:
     # used_today-vs-avg_daily comparison wouldn't yet have enough of the day
     # behind it to trip. Widens the timeline chart so it stands out.
     rocketing: bool = False
+
+    # A spike only matters if, at its pace, the gauge would use up (nearly)
+    # all it has left before it resets: days_to_exhaust within this multiple
+    # of the time left. 1.25 = the burst alone would eat about 80% of what
+    # remains. Unit-agnostic (works for %, $, requests alike).
+    SPIKE_THREAT_RATIO = 1.25
+
+    @property
+    def is_alarming(self) -> bool:
+        """Worth the chip's alarm treatment (alert chart, tinted row): a
+        confirmed risk of running out before the reset, or a pace spike that
+        is actually heading for the cap — not a spike on a gauge that still
+        has hours to spare."""
+        if self.will_exhaust and self.confident:
+            return True
+        if not self.rocketing:
+            return False
+        if self.days_to_exhaust is None or not self.days_left:
+            return True  # cannot judge the margin — keep the warning
+        return self.days_to_exhaust <= self.days_left * self.SPIKE_THREAT_RATIO
