@@ -12,7 +12,7 @@ from __future__ import annotations
 import base64
 
 from PySide6.QtCore import QBuffer, QIODevice, QPointF, Qt
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap, QTransform
 
 _EYE_POINT = (20.0, 11.6)
 _LEG_A = ((12.5, 27.3), (11.3, 30.2))
@@ -62,6 +62,86 @@ JUMP_FRAME_COUNT = len(_JUMP_ARC)
 # hops over the bush instead of walking straight past — "raz na jakis
 # czas", not every single pass.
 JUMP_CHANCE = 1.0 / 5.0
+
+
+# Flight: now and then, on reaching the right end of its path, the raven
+# flaps up out of the scene, is gone for a few beats, then glides back in
+# from the left and lands where the pace starts (see fly_pose).
+FLY_CLIMB_FRAMES = 6
+FLY_GONE_FRAMES = 6
+FLY_RETURN_FRAMES = 7
+FLY_FRAME_COUNT = FLY_CLIMB_FRAMES + FLY_GONE_FRAMES + FLY_RETURN_FRAMES
+FLY_CHANCE = 1.0 / 12.0
+_WING_FILL = QColor(24, 28, 19)  # the chip panel's own dark olive
+_FLAP = ("down", "up", "mid")  # one wingbeat; three poses read as flapping
+_WING_ROOT = (13.0, 14.0)
+_WING_LEN = 19.0
+# pose -> (angle of the wing's long axis in degrees, which side the
+# trailing edge is on: +1 / -1)
+_WING_POSES: dict[str, tuple[float, int]] = {
+    "up": (-104.0, -1),
+    "mid": (196.0, -1),
+    "down": (98.0, 1),
+}
+
+
+def wing_path(s: float, pose: str) -> QPainterPath:
+    """A feathered wing as one outline — smooth leading edge, scalloped
+    trailing edge with four finger tips — rooted at the shoulder of the
+    32x32 raven grid and swung to "up", "mid" (swept back) or "down"."""
+    length = _WING_LEN
+    blade = QPainterPath()
+    blade.moveTo(0.0, -2.2)
+    blade.quadTo(length * 0.5, -6.0, length, -0.8)
+    for x, y in (
+        (length * 0.80, 1.6),
+        (length * 0.82, 4.2),
+        (length * 0.58, 3.0),
+        (length * 0.58, 5.8),
+        (length * 0.34, 4.4),
+        (length * 0.30, 6.4),
+        (0.0, 4.2),
+    ):
+        blade.lineTo(x, y)
+    blade.closeSubpath()
+    angle, side = _WING_POSES[pose]
+    transform = QTransform()
+    transform.translate(_WING_ROOT[0] * s, _WING_ROOT[1] * s)
+    transform.rotate(angle)
+    transform.scale(s, s * side)
+    return transform.map(blade)
+
+
+def at_path_right_end(step: int) -> bool:
+    """True on the step the raven reaches the right end of its pace, facing
+    right — the one spot it can take off from without turning round."""
+    return step % (2 * WALK_CYCLE_STEPS) == WALK_CYCLE_STEPS
+
+
+def fly_pose(frame: int) -> tuple[bool, float, float, float, str | None, bool]:
+    """(visible, x, y, tilt, wing, legs_down) for one frame of the flight:
+    climb out to the upper right, a few frames out of sight, then a glide
+    in from the left that ends standing at the start of the path. Always
+    facing right. x/y are pixels in scene coordinates (y relative to the
+    standing line), tilt in degrees (negative = nose up)."""
+    frame = max(0, min(frame, FLY_FRAME_COUNT - 1))
+    if frame < FLY_CLIMB_FRAMES:
+        t = frame + 1
+        x = _WALK_X_MAX + 3.5 * t
+        y = -(3.2 * t + 0.6 * t * t)
+        return True, x, y, -22.0, _FLAP[frame % len(_FLAP)], False
+    frame -= FLY_CLIMB_FRAMES
+    if frame < FLY_GONE_FRAMES:
+        return False, 0.0, 0.0, 0.0, None, False
+    r = frame - FLY_GONE_FRAMES
+    u = (r + 1) / FLY_RETURN_FRAMES
+    x = -34.0 + (_WALK_X_MIN + 34.0) * u
+    y = -30.0 * (1.0 - u) ** 1.6
+    if r == FLY_RETURN_FRAMES - 1:
+        return True, x, 0.0, 0.0, None, True  # landed
+    if r == FLY_RETURN_FRAMES - 2:
+        return True, x, y, 4.0, "up", True  # flare: wings up, feet reaching down
+    return True, x, y, 9.0 * (1.0 - u), _FLAP[r % len(_FLAP)], False
 
 
 def walk_pose(
@@ -164,6 +244,8 @@ def paint_raven_outline(
     leg_a: tuple[tuple[float, float], tuple[float, float]] = _LEG_A,
     leg_b: tuple[tuple[float, float], tuple[float, float]] = _LEG_B,
     line_width: float | None = None,
+    wing: str | None = None,
+    wing_fill: QColor | None = None,
 ) -> None:
     """Strokes the detailed contour (no fill) — the "zarys" (outline)
     treatment, for anything above ``SOLID_MAX_SIZE``. Caller owns the
@@ -183,6 +265,13 @@ def paint_raven_outline(
         painter.setBrush(eye_color)
         ex, ey = _EYE_POINT
         painter.drawEllipse(QPointF(ex * s, ey * s), 0.8 * s, 0.8 * s)
+
+    if wing is not None:
+        painter.setPen(pen)
+        # Filled with the panel's own colour so the wing hides the body
+        # outline behind it instead of crossing it in a tangle of lines.
+        painter.setBrush(wing_fill if wing_fill is not None else Qt.BrushStyle.NoBrush)
+        painter.drawPath(wing_path(s, wing))
 
     if legs:
         painter.setPen(pen)
@@ -234,6 +323,10 @@ def raven_scene_html(
     WeatherPanel.paintEvent) — for dropping into a QLabel's rich text as
     the chip's side watermark (ui/hud.py).
 
+    ``mode="fly"``: ``index`` is a frame in 0..FLY_FRAME_COUNT-1 (see
+    fly_pose) — the raven flaps off the scene, is gone a few beats and
+    glides back in to land.
+
     ``mode="walk"``: ``index`` is a step count (see walk_pose) — the raven
     paces back and forth across the scene. ``mode="jump"``: ``index`` is a
     frame in 0..JUMP_FRAME_COUNT-1 (see jump_pose) — the raven hops over a
@@ -241,7 +334,14 @@ def raven_scene_html(
     switch and the frame/step advance; this function only renders one
     frame of whichever it's told.
     """
-    if mode == "jump":
+    wing: str | None = None
+    visible = True
+    if mode == "fly":
+        visible, x, y, tilt, wing, legs_down = fly_pose(index)
+        leg_a, leg_b = (_LEG_A, _LEG_B) if legs_down else (_LEG_A_LIFTED, _LEG_B_LIFTED)
+        facing_left = False
+        show_bush = False
+    elif mode == "jump":
         x, y, tilt, leg_a, leg_b = jump_pose(index)
         facing_left = False
         show_bush = True
@@ -261,6 +361,10 @@ def raven_scene_html(
 
     painter.save()
     painter.translate(x, _TOP_MARGIN + y)
+    if not visible:
+        painter.restore()
+        painter.end()
+        return _pixmap_to_img_tag(pix)
     if facing_left:
         # Mirror within the raven's own local box so it paces back the way
         # it came instead of moonwalking.
@@ -271,11 +375,22 @@ def raven_scene_html(
     painter.rotate(tilt)
     painter.translate(-pivot)
     paint_raven_outline(
-        painter, _SCALE, line_color=line_color, eye_color=eye_color, legs=True, leg_a=leg_a, leg_b=leg_b
+        painter,
+        _SCALE,
+        line_color=line_color,
+        eye_color=eye_color,
+        legs=True,
+        leg_a=leg_a,
+        leg_b=leg_b,
+        wing=wing,
+        wing_fill=_WING_FILL,
     )
     painter.restore()
     painter.end()
+    return _pixmap_to_img_tag(pix)
 
+
+def _pixmap_to_img_tag(pix: QPixmap) -> str:
     buf = QBuffer()
     buf.open(QIODevice.OpenModeFlag.WriteOnly)
     pix.save(buf, "PNG")

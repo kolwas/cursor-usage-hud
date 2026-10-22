@@ -40,11 +40,14 @@ from usage_hud.ui.formatters import (
     reset_fraction_remaining,
 )
 from usage_hud.ui.raven_glyph import (
+    FLY_CHANCE,
+    FLY_FRAME_COUNT,
     JUMP_CHANCE,
     JUMP_FRAME_COUNT,
     SCENE_DISPLAY_HEIGHT,
     SCENE_DISPLAY_WIDTH,
     at_path_centre,
+    at_path_right_end,
     raven_scene_html,
 )
 
@@ -178,6 +181,7 @@ class WeatherPanel(QWidget):
         self._raven_mode = "walk"
         self._raven_step = 0
         self._raven_jump_frame = 0
+        self._raven_fly_frame = 0
         self._raven_mark = QLabel()
         self._raven_mark.setTextFormat(Qt.TextFormat.RichText)
         self._raven_mark.setStyleSheet("background: transparent;")
@@ -249,6 +253,13 @@ class WeatherPanel(QWidget):
         self._alert_cycle_timer.start()
 
     def _raven_mark_html(self) -> str:
+        if self._raven_mode == "fly":
+            return raven_scene_html(
+                line_color=_RAVEN_MARK_COLOR,
+                eye_color=_RAVEN_MARK_EYE,
+                mode="fly",
+                index=self._raven_fly_frame,
+            )
         if self._raven_mode == "jump":
             return raven_scene_html(
                 line_color=_RAVEN_MARK_COLOR,
@@ -265,7 +276,15 @@ class WeatherPanel(QWidget):
         )
 
     def _tick_raven_mark(self) -> None:
-        if self._raven_mode == "jump":
+        if self._raven_mode == "fly":
+            self._raven_fly_frame += 1
+            if self._raven_fly_frame >= FLY_FRAME_COUNT:
+                # It lands at the left end of the path, facing right — the
+                # first step of the pace.
+                self._raven_mode = "walk"
+                self._raven_fly_frame = 0
+                self._raven_step = 0
+        elif self._raven_mode == "jump":
             self._raven_jump_frame += 1
             if self._raven_jump_frame >= JUMP_FRAME_COUNT:
                 # Land back into the walk cycle a little past the bush,
@@ -279,6 +298,9 @@ class WeatherPanel(QWidget):
             if at_path_centre(self._raven_step) and random.random() < JUMP_CHANCE:
                 self._raven_mode = "jump"
                 self._raven_jump_frame = 0
+            elif at_path_right_end(self._raven_step) and random.random() < FLY_CHANCE:
+                self._raven_mode = "fly"
+                self._raven_fly_frame = 0
         self._raven_mark.setText(self._raven_mark_html())
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
@@ -903,8 +925,10 @@ class WeatherPanel(QWidget):
             # A quick, eye-catching flourish on the swap — the raven
             # notices the chart changing, rather than it just silently
             # jumping to a different gauge.
-            self._raven_mode = "jump"
-            self._raven_jump_frame = 0
+            # A bird that is away (or mid-flap) is not interrupted for it.
+            if self._raven_mode == "walk":
+                self._raven_mode = "jump"
+                self._raven_jump_frame = 0
         self._render()
 
     # Chip table columns: Label | Clock | Days | Hours | Minutes | Percent |

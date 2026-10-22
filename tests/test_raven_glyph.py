@@ -103,3 +103,72 @@ def test_weather_panel_jump_sequence_returns_to_walking(monkeypatch):
         panel._tick_raven_mark()
     assert panel._raven_mode == "walk"
     panel.deleteLater()
+
+
+def test_fly_frames_render_and_the_bird_is_out_of_sight_in_the_middle():
+    from usage_hud.ui.raven_glyph import (
+        FLY_CLIMB_FRAMES,
+        FLY_FRAME_COUNT,
+        FLY_GONE_FRAMES,
+        fly_pose,
+        raven_scene_html,
+    )
+
+    for f in range(FLY_FRAME_COUNT):
+        html = raven_scene_html(line_color=QColor("#cbbf8f"), eye_color=QColor("#c9a24a"), mode="fly", index=f)
+        assert html.startswith('<img src="data:image/png;base64,')
+
+    visible = [fly_pose(f)[0] for f in range(FLY_FRAME_COUNT)]
+    gone = visible[FLY_CLIMB_FRAMES : FLY_CLIMB_FRAMES + FLY_GONE_FRAMES]
+    assert not any(gone)
+    assert all(visible[:FLY_CLIMB_FRAMES]) and all(visible[FLY_CLIMB_FRAMES + FLY_GONE_FRAMES :])
+
+
+def test_flight_flaps_and_ends_standing_at_the_start_of_the_path():
+    from usage_hud.ui.raven_glyph import FLY_CLIMB_FRAMES, FLY_FRAME_COUNT, _WALK_X_MIN, fly_pose
+
+    wings = {fly_pose(f)[4] for f in range(FLY_CLIMB_FRAMES)}
+    assert len(wings) >= 2 and None not in wings
+    visible, x, y, tilt, wing, legs_down = fly_pose(FLY_FRAME_COUNT - 1)
+    assert (visible, x, y, tilt, wing, legs_down) == (True, _WALK_X_MIN, 0.0, 0.0, None, True)
+
+
+def test_every_wing_pose_is_a_closed_non_empty_shape():
+    from usage_hud.ui.raven_glyph import wing_path
+
+    for pose in ("up", "mid", "down"):
+        assert not wing_path(1.0, pose).isEmpty()
+
+
+def test_weather_panel_flight_returns_to_walking_from_the_left_end(monkeypatch):
+    from usage_hud.ui import hud as hud_module
+    from usage_hud.ui.hud import WeatherPanel
+    from usage_hud.ui.raven_glyph import FLY_FRAME_COUNT, WALK_CYCLE_STEPS
+
+    panel = WeatherPanel(opacity=0.9)
+    monkeypatch.setattr(hud_module.random, "random", lambda: 0.99)  # never hop
+    monkeypatch.setattr(hud_module, "FLY_CHANCE", 1.0)  # always take off at the right end
+    for _ in range(2 * WALK_CYCLE_STEPS):
+        panel._tick_raven_mark()
+        if panel._raven_mode == "fly":
+            break
+    assert panel._raven_mode == "fly"
+
+    for _ in range(FLY_FRAME_COUNT):
+        panel._tick_raven_mark()
+    assert panel._raven_mode == "walk"
+    assert panel._raven_step == 0
+    panel.deleteLater()
+
+
+def test_alert_chart_swap_does_not_interrupt_a_flight():
+    from usage_hud.ui.hud import WeatherPanel
+
+    panel = WeatherPanel(opacity=0.9)
+    panel._raven_mode = "fly"
+    panel._raven_fly_frame = 3
+    panel._hot_gauges = lambda: [object(), object()]  # type: ignore[method-assign]
+    panel._render = lambda: None  # type: ignore[method-assign]
+    panel._tick_alert_cycle()
+    assert panel._raven_mode == "fly"
+    panel.deleteLater()
