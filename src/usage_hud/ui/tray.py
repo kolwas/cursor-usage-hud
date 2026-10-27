@@ -287,6 +287,8 @@ class TrayController:
             reset_eta = format_reset_eta(snap.cycle_end, snap.fetched_at)
             reset = f" · reset {reset_eta}" if reset_eta else ""
             lines.append(f"{name}: {pct_txt}{suffix}{eta_txt}{reset}")
+            if snap.raw.get("live_error"):
+                lines.append(f"  ! {snap.raw['live_error']}")
         lines.append("")
         lines.append("Click icon → pinned details")
         lines.append("Right-click → Providers / Hide chip")

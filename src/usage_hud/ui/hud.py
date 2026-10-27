@@ -1107,7 +1107,13 @@ class WeatherPanel(QWidget):
                 # behind another gauge's prediction.
                 label = f"{tag} {chip_metric_tag(metric)}" if multi else tag
                 days_html, hours_html, minutes_html = self._reset_parts_html(snap, metric)
-                if pct is None:
+                live_error = snap.raw.get("live_error", "")
+                if pct is None and live_error:
+                    # Live usage is switched on but failing, and nothing else
+                    # knows this gauge — say so instead of a silent dash.
+                    hint = "login" if "sign-in" in live_error else "live?"
+                    pct_html = f'<span style="color:#ffb020; font-weight:700;">{hint}</span>'
+                elif pct is None:
                     pct_html = '<span style="color:#5a6272;">—</span>'
                 elif metric.stale:
                     # Last logged value, not a live one — grey and "~" so it
