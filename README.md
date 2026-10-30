@@ -48,8 +48,19 @@ the code that touches the token lives in exactly one function,
 `fetch_live_usage()` in `providers/anthropic_live.py`. Its rules: the token is read inside
 that call only, held in a local variable, sent only to Anthropic over HTTPS, never refreshed
 (refreshing could sign Claude Code out), never saved, logged or put in an error message. Any
-failure falls back to the Desktop log. The function ships **unimplemented** — until someone
-writes it, turning the option on changes nothing.
+failure falls back to the Desktop log.
+
+The access token only lives a few hours and Claude Code renews it only when it is used, so
+live mode drops out (the chip shows an amber `login`) until Claude Code runs again. To keep it
+fresh without touching any credential file, `tools/claude-token-keepalive.ps1` makes one tiny
+request through the official `claude` CLI (Haiku, no session file); the CLI refreshes its own
+token as a side effect. Run it from Task Scheduler every ~4 hours, for the current user:
+
+```powershell
+schtasks /Create /TN "UsageHud-ClaudeTokenKeepalive" /SC HOURLY /MO 4 /F /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File <path-to-repo>\tools\claude-token-keepalive.ps1"
+```
+
+Its log is `%APPDATA%\usage-hud\keepalive.log` (time, exit code, first words of the reply).
 
 For the other providers, the credential model is: usage-hud reads the token *that app already
 wrote to disk* (Cursor's session in `state.vscdb`, OpenCode's in `auth.json`) and sends it
