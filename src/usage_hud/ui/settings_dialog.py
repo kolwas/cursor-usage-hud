@@ -186,7 +186,9 @@ class SettingsDialog(QDialog):
                 warn = QLabel(
                     "Off by default. When on, the app reads Claude Code's sign-in at "
                     "runtime and asks Anthropic (only) for your usage. The token is "
-                    "never saved or logged. If it fails, the Desktop log is used."
+                    "never saved or logged. To keep that sign-in from expiring, the "
+                    "app makes one tiny request through the `claude` CLI every ~3 h. "
+                    "If it fails, the Desktop log is used."
                 )
                 warn.setWordWrap(True)
                 warn.setStyleSheet("color: #6f7686; font-size: 11px;")

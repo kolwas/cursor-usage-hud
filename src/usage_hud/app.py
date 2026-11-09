@@ -13,6 +13,12 @@ from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 from usage_hud import lifecycle
 from usage_hud.alerts import evaluate_alerts
 from usage_hud.branding import APP_NAME, DESKTOP_FILE_NAME, app_icon
+from usage_hud.claude_keepalive import (
+    SCHEDULED_INTERVAL,
+    KeepaliveResult,
+    KeepaliveRunner,
+    needs_refresh_now,
+)
 from usage_hud.config import Settings
 from usage_hud.fetcher import BackgroundFetcher
 from usage_hud.history import HistoryStore
@@ -34,6 +40,7 @@ class UsageHudApp:
         self.providers = discover_providers(settings)
         self._fetcher = BackgroundFetcher(self._apply)
         self._last_live_state = ""
+        self._keepalive = KeepaliveRunner(self._on_keepalive)
         self.history = HistoryStore(settings.state_dir / "history.json")
         self.snooze_store = SnoozeStore(settings.state_dir / "snooze.json")
         self._snooze = self.snooze_store.load()
@@ -58,6 +65,15 @@ class UsageHudApp:
         self._timer.setInterval(settings.refresh_seconds * 1000)
         self._timer.timeout.connect(self.refresh)
         self._timer.start()
+
+        if settings.claude_live_usage:
+            # Claude Code's token only renews when Claude Code is used, so
+            # use it now and then (see claude_keepalive).
+            self._keepalive_timer = QTimer()
+            self._keepalive_timer.setInterval(int(SCHEDULED_INTERVAL.total_seconds() * 1000))
+            self._keepalive_timer.timeout.connect(lambda: self._start_keepalive("scheduled"))
+            self._keepalive_timer.start()
+            QTimer.singleShot(8000, lambda: self._start_keepalive("startup"))
 
         # Idle-monitor dock + snooze expiry (no auto-hide otherwise).
         self._ui_timer = QTimer()
@@ -155,6 +171,17 @@ class UsageHudApp:
                 lifecycle.note(self.settings.state_dir, f"claude: {state}")
             self._last_live_state = state
 
+    def _start_keepalive(self, reason: str) -> None:
+        if self.settings.claude_live_usage:
+            self._keepalive.start(self.settings.state_dir, reason=reason)
+
+    def _on_keepalive(self, reason: str, result: KeepaliveResult) -> None:
+        if not result.ran:
+            return
+        lifecycle.note(self.settings.state_dir, f"claude: sign-in keepalive ({reason}): {result.text}")
+        if result.ok:
+            self.refresh()
+
     def refresh(self) -> None:
         """Ask for fresh data; the window is updated by _apply when it arrives."""
         self._fetcher.start(self.settings)
@@ -162,6 +189,8 @@ class UsageHudApp:
     def _apply(self, providers: list, snapshots: list) -> None:
         self.providers = providers
         self._log_live_state(snapshots)
+        if needs_refresh_now(snapshots):
+            self._start_keepalive("expired")
         shown = visible_snapshots(snapshots)
         self.history.record(shown)
         projections = self.history.projections(

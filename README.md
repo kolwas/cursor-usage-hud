@@ -50,11 +50,14 @@ that call only, held in a local variable, sent only to Anthropic over HTTPS, nev
 (refreshing could sign Claude Code out), never saved, logged or put in an error message. Any
 failure falls back to the Desktop log.
 
-The access token only lives a few hours and Claude Code renews it only when it is used, so
-live mode drops out (the chip shows an amber `login`) until Claude Code runs again. To keep it
-fresh without touching any credential file, `tools/claude-token-keepalive.ps1` makes one tiny
-request through the official `claude` CLI (Haiku, no session file); the CLI refreshes its own
-token as a side effect. Run it from Task Scheduler every ~4 hours, for the current user:
+The access token only lives a few hours and Claude Code renews it only when it is used. So
+while live mode is on, the app itself makes one tiny request through the official `claude`
+CLI (Haiku, no session file) every ~3 hours, and straight away when the sign-in has expired;
+the CLI refreshes its own token as a side effect (`claude_keepalive.py` — it never reads,
+writes or logs a credential; the app's log only says whether the CLI succeeded). Without the
+CLI installed, live mode drops out (the chip shows an amber `login`) until Claude Code runs
+again. The same request can also be run from Task Scheduler instead, with
+`tools/claude-token-keepalive.ps1`, for the current user:
 
 ```powershell
 schtasks /Create /TN "UsageHud-ClaudeTokenKeepalive" /SC HOURLY /MO 4 /F /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File <path-to-repo>\tools\claude-token-keepalive.ps1"
