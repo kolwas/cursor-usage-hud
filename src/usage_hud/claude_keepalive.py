@@ -67,6 +67,17 @@ def _save(state_dir: Path, data: dict) -> None:
         pass
 
 
+def _signed_out(proc: subprocess.CompletedProcess) -> bool:
+    """True when the CLI says its own sign-in is gone for good (the refresh
+    token was rejected) — only a fresh interactive /login helps then. Looks at
+    the output but never keeps or logs any of it."""
+    text = b" ".join(part for part in (proc.stdout, proc.stderr) if isinstance(part, bytes)).lower()
+    return any(
+        marker in text
+        for marker in (b"could not be refreshed", b"/login", b"not logged in", b"failed to authenticate")
+    )
+
+
 def needs_refresh_now(snapshots: list) -> bool:
     """True when a Claude snapshot says live usage failed because the sign-in
     expired — the moment to renew it rather than wait for the schedule."""
@@ -113,6 +124,10 @@ def run_keepalive(
     except OSError as exc:
         return KeepaliveResult(True, False, f"failed ({type(exc).__name__})")
     if proc.returncode != 0:
+        if _signed_out(proc):
+            return KeepaliveResult(
+                True, False, "failed (the CLI is signed out - run `claude`, then /login)"
+            )
         return KeepaliveResult(True, False, f"failed (exit {proc.returncode})")
     state["last_ok"] = now.isoformat()
     _save(state_dir, state)

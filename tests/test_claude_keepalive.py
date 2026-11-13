@@ -69,6 +69,18 @@ def test_failure_text_never_contains_the_cli_output(tmp_path):
     assert "LEAK" not in (tmp_path / "keepalive.json").read_text(encoding="utf-8")
 
 
+def test_a_signed_out_cli_is_reported_as_needing_a_login(tmp_path):
+    """The real failure seen on 2026-11-13: the CLI's refresh token was rejected,
+    so only an interactive /login helps — the log must say so, not "exit 1"."""
+    cli = FakeCli(
+        returncode=1,
+        stdout=b"Failed to authenticate: OAuth session expired and could not be refreshed",
+    )
+    result = _run(tmp_path, cli)
+    assert result.ok is False and "signed out" in result.text and "/login" in result.text
+    assert "OAuth" not in result.text  # fixed wording only, never the CLI's own text
+
+
 def test_missing_cli_is_skipped_quietly(tmp_path):
     cli = FakeCli()
     result = _run(tmp_path, cli, found=None)
