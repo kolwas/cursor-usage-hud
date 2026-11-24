@@ -328,8 +328,14 @@ def compact_title(snapshots: list[ProviderSnapshot], alerts: list[Alert]) -> str
         if not snap.ok:
             bits.append(f"{tag}:!")
             continue
-        pct = snap.primary_percent()
-        bits.append(f"{tag}:{pct:.0f}%" if pct is not None else tag)
+        # First gauge with a number; a stale one gets "~" like on the chip, so
+        # an old log reading never reads as a live 0%.
+        known = next((m for m in snap.metrics if m.resolved_percent() is not None), None)
+        if known is None:
+            bits.append(tag)
+            continue
+        mark = "~" if known.stale else ""
+        bits.append(f"{tag}:{mark}{known.resolved_percent():.0f}%")
     text = " · ".join(bits) if bits else "Usage HUD"
     if alerts and alerts[0].level in {AlertLevel.WARN, AlertLevel.CRITICAL}:
         text = f"! {text}"
