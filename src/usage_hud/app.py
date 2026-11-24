@@ -40,6 +40,7 @@ class UsageHudApp:
         self.providers = discover_providers(settings)
         self._fetcher = BackgroundFetcher(self._apply)
         self._last_live_state = ""
+        self._failures_seen: dict[str, str] = {}
         self._keepalive = KeepaliveRunner(self._on_keepalive)
         self.history = HistoryStore(settings.state_dir / "history.json")
         self.snooze_store = SnoozeStore(settings.state_dir / "snooze.json")
@@ -189,6 +190,7 @@ class UsageHudApp:
     def _apply(self, providers: list, snapshots: list) -> None:
         self.providers = providers
         self._log_live_state(snapshots)
+        lifecycle.note_provider_failures(self.settings.state_dir, snapshots, self._failures_seen)
         if needs_refresh_now(snapshots):
             self._start_keepalive("expired")
         shown = visible_snapshots(snapshots)

@@ -9,6 +9,7 @@ pulse time bounds when it died.
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -53,6 +54,33 @@ def pulse(state_dir: Path) -> None:
 
 def note(state_dir: Path, text: str) -> None:
     _append(state_dir, text)
+
+
+_LONG_TOKENISH = re.compile(r"[A-Za-z0-9_\-.+/=]{40,}")
+_MAX_ERROR_CHARS = 160
+
+
+def _plain_error(text: str) -> str:
+    """One short line: runs that could be a token are masked, the rest capped."""
+    text = _LONG_TOKENISH.sub("…", " ".join(text.split()))
+    return text if len(text) <= _MAX_ERROR_CHARS else text[:_MAX_ERROR_CHARS] + "…"
+
+
+def note_provider_failures(state_dir: Path, snapshots: list, seen: dict[str, str]) -> None:
+    """Log why a provider failed (the chip only shows "!") — once per change.
+
+    ``seen`` remembers each provider's last failure so a steady error is not
+    repeated every refresh; a later success is noted once as "ok again".
+    """
+    for snap in snapshots:
+        if snap.ok:
+            if seen.pop(snap.provider_id, ""):
+                _append(state_dir, f"{snap.provider_id}: ok again")
+            continue
+        reason = _plain_error(snap.error or "failed without a message")
+        if seen.get(snap.provider_id) != reason:
+            seen[snap.provider_id] = reason
+            _append(state_dir, f"{snap.provider_id}: {reason}")
 
 
 def session_ending(state_dir: Path) -> None:
