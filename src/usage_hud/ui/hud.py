@@ -39,7 +39,7 @@ from usage_hud.ui.formatters import (
     reset_eta_parts,
     reset_fraction_remaining,
 )
-from usage_hud.ui.raven_gags import GAG_NAMES, gag_frame_count, pick_gag
+from usage_hud.ui.raven_gags import GAG_NAMES, LANDS_AT_START, gag_frame_count, pick_gag
 from usage_hud.ui.raven_glyph import (
     FLY_CHANCE,
     FLY_FRAME_COUNT,
@@ -313,8 +313,9 @@ class WeatherPanel(QWidget):
             if self._raven_gag_frame >= gag_frame_count(self._raven_gag):
                 self._raven_mode = "walk"
                 self._raven_gag_frame = 0
-                if self._raven_gag == "shoo":
-                    # Chased off, it lands at the left end of the path.
+                if self._raven_gag in LANDS_AT_START:
+                    # Chased off or carried away, it lands at the left end
+                    # of the path.
                     self._raven_step = 0
                 # The other scenes happen where it stands, mid-path — the
                 # pace simply carries on from the step it stopped at.

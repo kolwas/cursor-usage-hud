@@ -92,6 +92,45 @@ class RavenPose:
     leg_b: tuple[tuple[float, float], tuple[float, float]] = _LEG_B
     facing_left: bool = False
     pivot: tuple[float, float] | None = None  # tilt about this point
+    eye_closed: bool = False  # a sleepy arc instead of the round eye
+
+
+# Landmarks on the raven's own 32x32 grid that props attach to (see
+# pose_point): the tip of the beak, the crown of the head.
+BEAK_TIP = (30.0, 13.0)
+CROWN = (19.0, 7.4)
+GROUND_Y = FLOOR_Y - 1.9  # the line the feet actually rest on
+
+
+def pose_transform(pose: RavenPose) -> QTransform:
+    """The matrix that places the raven's design grid in the scene for one
+    pose: lift/step, mirror, squash about the feet, then tilt."""
+    t = QTransform()
+    t.translate(pose.x, _TOP_MARGIN + pose.y)
+    if pose.facing_left:
+        # Mirror within the raven's own local box so it paces back the way
+        # it came instead of moonwalking.
+        t.translate(_RAVEN_BOX, 0)
+        t.scale(-1, 1)
+    if pose.squash != 1.0:
+        # Squash / stretch about the bottom centre: a flattened bird spreads
+        # sideways, a stretched one gets slimmer.
+        sx = 1.0 + (1.0 - pose.squash) * 0.55
+        t.translate(_RAVEN_BOX / 2.0, _RAVEN_BOX)
+        t.scale(sx, pose.squash)
+        t.translate(-_RAVEN_BOX / 2.0, -_RAVEN_BOX)
+    pivot = QPointF(*(pose.pivot or (_RAVEN_BOX / 2.0, _RAVEN_BOX / 2.0)))
+    t.translate(pivot.x(), pivot.y())
+    t.rotate(pose.tilt)
+    t.translate(-pivot.x(), -pivot.y())
+    return t
+
+
+def pose_point(pose: RavenPose, point: tuple[float, float]) -> tuple[float, float]:
+    """Where a landmark of the raven (a point on its 32x32 grid) ends up in
+    the scene for ``pose`` — so a prop can follow the beak as it bobs."""
+    mapped = pose_transform(pose).map(QPointF(point[0] * _SCALE, point[1] * _SCALE))
+    return mapped.x(), mapped.y()
 
 
 # Flight: now and then, on reaching the right end of its path, the raven
@@ -315,6 +354,7 @@ def paint_raven_outline(
     line_width: float | None = None,
     wing: str | None = None,
     wing_fill: QColor | None = None,
+    eye_closed: bool = False,
 ) -> None:
     """Strokes the detailed contour (no fill) — the "zarys" (outline)
     treatment, for anything above ``SOLID_MAX_SIZE``. Caller owns the
@@ -330,10 +370,21 @@ def paint_raven_outline(
     painter.drawPath(raven_path(s, detailed=True))
 
     if eye_color is not None:
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(eye_color)
         ex, ey = _EYE_POINT
-        painter.drawEllipse(QPointF(ex * s, ey * s), 0.8 * s, 0.8 * s)
+        if eye_closed:
+            lid = QPen(eye_color)
+            lid.setWidthF(max(0.9, 1.0 * s))
+            lid.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(lid)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            arc = QPainterPath()
+            arc.moveTo((ex - 1.5) * s, (ey - 0.3) * s)
+            arc.quadTo(ex * s, (ey + 1.6) * s, (ex + 1.5) * s, (ey - 0.3) * s)
+            painter.drawPath(arc)
+        else:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(eye_color)
+            painter.drawEllipse(QPointF(ex * s, ey * s), 0.8 * s, 0.8 * s)
 
     if wing is not None:
         painter.setPen(pen)
@@ -394,23 +445,7 @@ def _draw_raven(painter: QPainter, pose: RavenPose, line_color: QColor, eye_colo
     if not pose.visible:
         return
     painter.save()
-    painter.translate(pose.x, _TOP_MARGIN + pose.y)
-    if pose.facing_left:
-        # Mirror within the raven's own local box so it paces back the way
-        # it came instead of moonwalking.
-        painter.translate(_RAVEN_BOX, 0)
-        painter.scale(-1, 1)
-    if pose.squash != 1.0:
-        # Squash / stretch about the bottom centre: a flattened bird spreads
-        # sideways, a stretched one gets slimmer.
-        sx = 1.0 + (1.0 - pose.squash) * 0.55
-        painter.translate(_RAVEN_BOX / 2.0, _RAVEN_BOX)
-        painter.scale(sx, pose.squash)
-        painter.translate(-_RAVEN_BOX / 2.0, -_RAVEN_BOX)
-    pivot = QPointF(*(pose.pivot or (_RAVEN_BOX / 2.0, _RAVEN_BOX / 2.0)))
-    painter.translate(pivot)
-    painter.rotate(pose.tilt)
-    painter.translate(-pivot)
+    painter.setTransform(pose_transform(pose), True)
     paint_raven_outline(
         painter,
         _SCALE,
@@ -421,6 +456,7 @@ def _draw_raven(painter: QPainter, pose: RavenPose, line_color: QColor, eye_colo
         leg_b=pose.leg_b,
         wing=pose.wing,
         wing_fill=_WING_FILL,
+        eye_closed=pose.eye_closed,
     )
     painter.restore()
 
@@ -449,6 +485,33 @@ def raven_scene_html(
     timer owns the mode switch and the frame/step advance; this function
     only renders one frame of whichever it's told.
     """
+    pix = scene_pixmap(
+        line_color=line_color,
+        eye_color=eye_color,
+        bush_color=bush_color,
+        mode=mode,
+        index=index,
+        gag=gag,
+        x0=x0,
+        facing_left=facing_left,
+    )
+    return _pixmap_to_img_tag(pix)
+
+
+def scene_pixmap(
+    *,
+    line_color: QColor,
+    eye_color: QColor | None = None,
+    bush_color: QColor | None = None,
+    mode: str = "walk",
+    index: int = 0,
+    gag: str | None = None,
+    x0: float | None = None,
+    facing_left: bool = False,
+    zoom: float = SCENE_ZOOM,
+) -> QPixmap:
+    """One frame of the scene as a transparent pixmap; ``zoom`` is only
+    changed to look at the artwork larger than the chip shows it."""
     bush: tuple[float, float] | None = None
     props: list = []
     if mode == "fly":
@@ -464,12 +527,16 @@ def raven_scene_html(
     else:
         pose = walk_raven_pose(index)
 
-    pix = QPixmap(SCENE_DISPLAY_WIDTH, SCENE_DISPLAY_HEIGHT)
+    pix = QPixmap(round(SCENE_WIDTH * zoom), round(SCENE_HEIGHT * zoom))
     pix.fill(QColor(0, 0, 0, 0))
     painter = QPainter(pix)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.scale(SCENE_ZOOM, SCENE_ZOOM)
+    painter.scale(zoom, zoom)
 
+    if props:
+        from usage_hud.ui import raven_gags
+
+        raven_gags.paint_props(painter, props, line_color, _WING_FILL, back=True)
     if bush is not None and bush_color is not None:
         paint_bush(
             painter,
@@ -485,7 +552,7 @@ def raven_scene_html(
 
         raven_gags.paint_props(painter, props, line_color, _WING_FILL)
     painter.end()
-    return _pixmap_to_img_tag(pix)
+    return pix
 
 
 def _pixmap_to_img_tag(pix: QPixmap) -> str:

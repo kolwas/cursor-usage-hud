@@ -248,8 +248,8 @@ def test_every_gag_frame_renders_and_each_starts_and_ends_standing():
         first, _ = gags.gag_frame(name, 0)
         last, last_props = gags.gag_frame(name, count - 1)
         assert first.visible and last.visible
-        if name == "shoo":
-            assert last.x == PATH_X_MIN  # chased off, lands back at the start
+        if name in gags.LANDS_AT_START:
+            assert last.x == PATH_X_MIN  # chased off or carried away, lands back at the start
         else:
             assert (last.x, last.squash, last.tilt) == (CENTRE_X, 1.0, 0.0)
             assert last_props == []  # the props are gone again
@@ -285,7 +285,7 @@ def test_pick_gag_reaches_every_scene_and_is_usually_nothing():
     assert gags.pick_gag(0.999) is None
     reached = {gags.pick_gag(i / 10000.0) for i in range(10000)}
     assert set(gags.GAG_NAMES) <= reached
-    assert sum(gags.pick_gag(i / 10000.0) is not None for i in range(10000)) < 2000
+    assert sum(gags.pick_gag(i / 10000.0) is not None for i in range(10000)) < 3500  # still a minority of laps
 
 
 def test_weather_panel_gag_runs_to_the_end_and_resumes_the_pace(monkeypatch):
@@ -313,15 +313,16 @@ def test_weather_panel_gag_runs_to_the_end_and_resumes_the_pace(monkeypatch):
 
 def test_ctrl_click_preview_plays_every_scene_in_turn():
     from usage_hud.ui.hud import WeatherPanel
+    from usage_hud.ui.raven_gags import GAG_NAMES
 
     panel = WeatherPanel(opacity=0.9)
     seen = []
-    for _ in range(8):
+    for _ in range(len(GAG_NAMES) + 2):  # the hop, every scene, the flight
         panel._play_next_scene()
         seen.append((panel._raven_mode, panel._raven_gag if panel._raven_mode == "gag" else None))
         panel._raven_mode = "walk"  # skip ahead to the next one
     modes = {m for m, _ in seen}
     gags_seen = {g for _, g in seen if g}
     assert {"jump", "gag", "fly"} <= modes
-    assert gags_seen == {"peck", "cage", "weight", "foot", "shoo"}
+    assert gags_seen == set(GAG_NAMES) and len(GAG_NAMES) >= 13
     panel.deleteLater()

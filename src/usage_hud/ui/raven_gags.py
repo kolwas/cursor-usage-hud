@@ -1,20 +1,23 @@
 """The raven's rarer scenes on the chip: pecking at the ground, a cage
-dropping over it, a 100-ton weight, Monty Python's giant foot, and being
-chased off with a broom (it flies away and comes back — see raven_glyph's
-flight). Each scene is a timeline of ``(RavenPose, props)`` frames; the
-renderer in raven_glyph draws them and WeatherPanel's timer steps through
-them.
+dropping over it, a 100-ton weight, Monty Python's giant foot, being chased
+off with a broom (it flies away and comes back — see raven_glyph's flight),
+and the longer adventures of raven_adventures (rain and a rainbow, a
+butterfly, a worm, a treasure chest, a nap, a song, balloons, fireworks).
+Each scene is a timeline of ``(RavenPose, props)`` frames; the renderer in
+raven_glyph draws them and WeatherPanel's timer steps through them.
 """
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
 
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 
+from usage_hud.ui import raven_adventures as adventures
+from usage_hud.ui import raven_art
 from usage_hud.ui import raven_glyph as rg
+from usage_hud.ui.raven_props import Prop
 
 # Per time the raven stands at the middle of its path facing right: the
 # chance of each scene. Rarer ones (the props) well under the hop's 1 in 5.
@@ -24,18 +27,19 @@ GAG_CHANCES: tuple[tuple[str, float], ...] = (
     ("weight", 0.02),
     ("foot", 0.02),
     ("shoo", 0.025),
+    ("rain", 0.015),
+    ("butterfly", 0.015),
+    ("worm", 0.015),
+    ("treasure", 0.015),
+    ("sleep", 0.012),
+    ("music", 0.015),
+    ("balloons", 0.012),
+    ("fireworks", 0.015),
 )
 GAG_NAMES = tuple(name for name, _ in GAG_CHANCES)
-
-
-@dataclass(frozen=True)
-class Prop:
-    """A thing in the scene. ``a`` is the main offset: how far above its
-    resting place a dropped prop is (negative = higher), or the broom's x."""
-
-    kind: str
-    a: float = 0.0
-    b: float = 0.0
+# Scenes that end with the raven landing at the start of its pace (it was
+# chased off or carried away) rather than where it stood.
+LANDS_AT_START = frozenset({"shoo"}) | adventures.LANDS_AT_START
 
 
 _CX = rg.CENTRE_X + rg.RAVEN_BOX / 2.0  # scene x of the standing raven's middle
@@ -55,6 +59,8 @@ _SHOO_CHASE = 5  # frames of running from the broom before it takes off
 
 
 def gag_frame_count(name: str) -> int:
+    if name in adventures.NAMES:
+        return adventures.frame_count(name)
     return {
         "peck": len(_PECK_TILT),
         "cage": len(_CAGE_DY),
@@ -83,6 +89,8 @@ def gag_frame(name: str, frame: int) -> tuple[rg.RavenPose, list[Prop]]:
 
 
 def _gag_frame(name: str, frame: int) -> tuple[rg.RavenPose, list[Prop]]:
+    if name in adventures.NAMES:
+        return adventures.frame(name, frame)
     frame = max(0, min(frame, gag_frame_count(name) - 1))
     stand = rg.CENTRE_X
     if name == "peck":
@@ -109,12 +117,26 @@ def _gag_frame(name: str, frame: int) -> tuple[rg.RavenPose, list[Prop]]:
     return rg.fly_raven_pose(k), props
 
 
-def paint_props(painter: QPainter, props: list[Prop], line_color: QColor, fill_color: QColor) -> None:
+def paint_props(
+    painter: QPainter,
+    props: list[Prop],
+    line_color: QColor,
+    fill_color: QColor,
+    *,
+    back: bool = False,
+) -> None:
+    """Paint the props of one layer: ``back`` for the sky and weather that go
+    behind the raven, the default for everything that stands in front."""
     pen = QPen(line_color)
     pen.setWidthF(1.4)
     pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
     pen.setCapStyle(Qt.PenCapStyle.RoundCap)
     for prop in props:
+        if (prop.kind in raven_art.BACK_KINDS) != back:
+            continue
+        if prop.kind in raven_art.KINDS:
+            raven_art.paint(painter, prop, line_color)
+            continue
         painter.save()
         painter.setPen(pen)
         if prop.kind == "cage":
