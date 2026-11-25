@@ -73,7 +73,7 @@ def test_an_adventure_is_animated_not_a_still():
 
 
 def test_sky_and_weather_are_painted_behind_the_raven():
-    assert {"rainbow", "rain", "moon", "stars", "burst"} == set(raven_art.BACK_KINDS)
+    assert {"rainbow", "rain", "moon", "stars", "burst"} <= set(raven_art.BACK_KINDS)
     assert "umbrella" not in raven_art.BACK_KINDS and "chest" not in raven_art.BACK_KINDS
 
 

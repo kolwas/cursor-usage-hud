@@ -258,9 +258,14 @@ def test_every_gag_frame_renders_and_each_starts_and_ends_standing():
 def test_props_actually_appear_during_their_scene():
     from usage_hud.ui import raven_gags as gags
 
-    for name, kind in (("cage", "cage"), ("weight", "weight"), ("foot", "foot"), ("shoo", "broom")):
-        kinds = {p.kind for f in range(gags.gag_frame_count(name)) for p in gags.gag_frame(name, f)[1]}
-        assert kinds == {kind}
+    def kinds(name):
+        return {p.kind for f in range(gags.gag_frame_count(name)) for p in gags.gag_frame(name, f)[1]}
+
+    assert kinds("weight") == {"weight"}
+    assert kinds("shoo") == {"broom"}
+    assert kinds("peck") == set()
+    assert {"cage", "padlock", "mouse", "thought"} <= kinds("cage")
+    assert {"foot", "shadow", "dust", "dizzy"} <= kinds("foot")
 
 
 def test_weight_and_foot_flatten_the_raven_then_let_it_spring_back():

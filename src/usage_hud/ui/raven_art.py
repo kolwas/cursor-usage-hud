@@ -17,63 +17,35 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen, QRadialGradient
 
 from usage_hud.ui import raven_glyph as rg
+from usage_hud.ui import raven_story_art
+from usage_hud.ui.raven_draw import (
+    CORAL,
+    CORAL_DARK,
+    CREAM,
+    DIRT,
+    GOLD,
+    GOLD_DARK,
+    LILAC,
+    ORANGE,
+    PALETTE,
+    PINK,
+    PINK_DARK,
+    SKY,
+    TEAL,
+    WOOD,
+    WOOD_DARK,
+)
+from usage_hud.ui.raven_draw import alpha as _alpha
+from usage_hud.ui.raven_draw import fill as _fill
+from usage_hud.ui.raven_draw import star as _star
+from usage_hud.ui.raven_draw import stroke as _stroke
 from usage_hud.ui.raven_props import Prop
 
-CORAL = QColor("#e8705b")
-CORAL_DARK = QColor("#b4503f")
-GOLD = QColor("#efbf4f")
-GOLD_DARK = QColor("#b98a2a")
-TEAL = QColor("#5cc2b0")
-SKY = QColor("#8fbfe6")
-PINK = QColor("#ec97aa")
-PINK_DARK = QColor("#c46f85")
-LILAC = QColor("#ab9de6")
-CREAM = QColor("#f4edcb")
-WOOD = QColor("#8f6440")
-WOOD_DARK = QColor("#684529")
-DIRT = QColor("#6f5538")
-ORANGE = QColor("#f2a444")
 _GROUND = rg.GROUND_Y
-_PALETTE = (CORAL, GOLD, TEAL, LILAC)
+_PALETTE = PALETTE
 
 # Drawn before the raven (sky, weather) — everything else in front of it.
 BACK_KINDS = frozenset({"rainbow", "rain", "moon", "stars", "burst"})
-
-
-def _alpha(color: QColor, alpha: float) -> QColor:
-    out = QColor(color)
-    out.setAlpha(max(0, min(255, int(alpha))))
-    return out
-
-
-def _fill(painter: QPainter, color: QColor) -> None:
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(color)
-
-
-def _stroke(painter: QPainter, color: QColor, width: float) -> None:
-    pen = QPen(color)
-    pen.setWidthF(width)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-    painter.setPen(pen)
-    painter.setBrush(Qt.BrushStyle.NoBrush)
-
-
-def _star(painter: QPainter, x: float, y: float, size: float, color: QColor) -> None:
-    """A four-pointed twinkle."""
-    path = QPainterPath()
-    for k in range(8):
-        radius = size if k % 2 == 0 else size * 0.3
-        angle = math.radians(k * 45.0 - 90.0)
-        point = QPointF(x + radius * math.cos(angle), y + radius * math.sin(angle))
-        if k == 0:
-            path.moveTo(point)
-        else:
-            path.lineTo(point)
-    path.closeSubpath()
-    _fill(painter, color)
-    painter.drawPath(path)
 
 
 # --- rain, umbrella, rainbow ---------------------------------------------------
@@ -417,6 +389,8 @@ _PAINTERS: dict[str, Callable[[QPainter, Prop, QColor], None]] = {
     "balloons": _paint_balloons,
     "burst": _paint_burst,
 }
+_PAINTERS.update(raven_story_art.PAINTERS)
+BACK_KINDS = BACK_KINDS | raven_story_art.BACK_KINDS
 KINDS = frozenset(_PAINTERS)
 
 

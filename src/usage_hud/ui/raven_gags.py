@@ -1,10 +1,12 @@
-"""The raven's rarer scenes on the chip: pecking at the ground, a cage
-dropping over it, a 100-ton weight, Monty Python's giant foot, being chased
-off with a broom (it flies away and comes back — see raven_glyph's flight),
-and the longer adventures of raven_adventures (rain and a rainbow, a
-butterfly, a worm, a treasure chest, a nap, a song, balloons, fireworks).
-Each scene is a timeline of ``(RavenPose, props)`` frames; the renderer in
-raven_glyph draws them and WeatherPanel's timer steps through them.
+"""The raven's rarer scenes on the chip: pecking at the ground, a 100-ton
+weight, being chased off with a broom (it flies away and comes back — see
+raven_glyph's flight), plus the longer ones of raven_adventures (rain and a
+rainbow, a butterfly, a worm, a treasure chest, a nap, a song, balloons,
+fireworks) and raven_stories (the cage and the mouse, Monty Python's giant
+foot, snow, a kite, fishing, a wizard's hat, bubbles, a hatching egg, a
+birthday, a disco). Each scene is a timeline of ``(RavenPose, props)``
+frames; the renderer in raven_glyph draws them and WeatherPanel's timer
+steps through them.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from usage_hud.ui import raven_adventures as adventures
 from usage_hud.ui import raven_art
 from usage_hud.ui import raven_glyph as rg
+from usage_hud.ui import raven_stories as stories
 from usage_hud.ui.raven_props import Prop
 
 # Per time the raven stands at the middle of its path facing right: the
@@ -27,33 +30,35 @@ GAG_CHANCES: tuple[tuple[str, float], ...] = (
     ("weight", 0.02),
     ("foot", 0.02),
     ("shoo", 0.025),
-    ("rain", 0.015),
-    ("butterfly", 0.015),
-    ("worm", 0.015),
-    ("treasure", 0.015),
-    ("sleep", 0.012),
-    ("music", 0.015),
-    ("balloons", 0.012),
-    ("fireworks", 0.015),
+    ("rain", 0.012),
+    ("butterfly", 0.012),
+    ("worm", 0.012),
+    ("treasure", 0.012),
+    ("sleep", 0.01),
+    ("music", 0.012),
+    ("balloons", 0.01),
+    ("fireworks", 0.012),
+    ("snow", 0.01),
+    ("kite", 0.01),
+    ("fishing", 0.01),
+    ("wizard", 0.01),
+    ("bubbles", 0.01),
+    ("egg", 0.01),
+    ("birthday", 0.01),
+    ("disco", 0.01),
 )
 GAG_NAMES = tuple(name for name, _ in GAG_CHANCES)
 # Scenes that end with the raven landing at the start of its pace (it was
 # chased off or carried away) rather than where it stood.
-LANDS_AT_START = frozenset({"shoo"}) | adventures.LANDS_AT_START
+LANDS_AT_START = frozenset({"shoo"}) | adventures.LANDS_AT_START | stories.LANDS_AT_START
 
 
 _CX = rg.CENTRE_X + rg.RAVEN_BOX / 2.0  # scene x of the standing raven's middle
 
 _PECK_TILT = (0.0, 20.0, 0.0, 20.0, 2.0, 22.0, 0.0, 0.0)
 
-_CAGE_DY = (-46.0, -24.0, 0.0, -3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -6.0, -22.0, -40.0, -64.0)
-_CAGE_TILT = (0.0, 0.0, 0.0, 0.0, -5.0, 18.0, 0.0, 18.0, 5.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-
 _WEIGHT_DY = (-60.0, -30.0, 0.0, -1.0, 0.0, -1.0, -6.0, -20.0, -44.0, -72.0, -72.0, -72.0)
 _WEIGHT_SQUASH = (1.0, 1.0, 0.2, 0.2, 0.2, 0.2, 0.2, 0.3, 1.2, 0.92, 1.04, 1.0)
-
-_FOOT_DY = (-75.0, -40.0, 0.0, 0.0, 0.0, 0.0, -6.0, -20.0, -44.0, -80.0, -80.0, -80.0, -80.0)
-_FOOT_SQUASH = (1.0, 1.0, 0.12, 0.12, 0.12, 0.12, 0.15, 0.3, 1.2, 0.95, 1.04, 1.0, 1.0)
 
 _SHOO_CHASE = 5  # frames of running from the broom before it takes off
 
@@ -61,11 +66,11 @@ _SHOO_CHASE = 5  # frames of running from the broom before it takes off
 def gag_frame_count(name: str) -> int:
     if name in adventures.NAMES:
         return adventures.frame_count(name)
+    if name in stories.NAMES:
+        return stories.frame_count(name)
     return {
         "peck": len(_PECK_TILT),
-        "cage": len(_CAGE_DY),
         "weight": len(_WEIGHT_DY),
-        "foot": len(_FOOT_DY),
         "shoo": _SHOO_CHASE + rg.FLY_FRAME_COUNT,
     }[name]
 
@@ -91,19 +96,15 @@ def gag_frame(name: str, frame: int) -> tuple[rg.RavenPose, list[Prop]]:
 def _gag_frame(name: str, frame: int) -> tuple[rg.RavenPose, list[Prop]]:
     if name in adventures.NAMES:
         return adventures.frame(name, frame)
+    if name in stories.NAMES:
+        return stories.frame(name, frame)
     frame = max(0, min(frame, gag_frame_count(name) - 1))
     stand = rg.CENTRE_X
     if name == "peck":
         return rg.RavenPose(x=stand, tilt=_PECK_TILT[frame], pivot=rg.FEET_PIVOT), []
-    if name == "cage":
-        pose = rg.RavenPose(x=stand, tilt=_CAGE_TILT[frame], pivot=rg.FEET_PIVOT)
-        return pose, [Prop("cage", _CAGE_DY[frame])]
     if name == "weight":
         pose = rg.RavenPose(x=stand, squash=_WEIGHT_SQUASH[frame])
         return pose, [Prop("weight", _WEIGHT_DY[frame])]
-    if name == "foot":
-        pose = rg.RavenPose(x=stand, squash=_FOOT_SQUASH[frame])
-        return pose, [Prop("foot", _FOOT_DY[frame])]
     # shoo: run from the broom to the end of the path, then fly off.
     if frame < _SHOO_CHASE:
         u = (frame + 1) / _SHOO_CHASE
